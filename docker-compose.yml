@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  reverse-proxy:
+    image: caddy:2.7-alpine
+    container_name: shipri-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - client
+      - server
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: shipri-client
+    restart: unless-stopped
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: shipri-server
+    restart: unless-stopped
+    environment:
+      - PORT=5001
+      - NODE_ENV=production
+      - TURN_SHARED_SECRET=your_super_secret_here
+    expose:
+      - "5001"
+
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    container_name: shipri-turn
+    restart: unless-stopped
+    network_mode: "host"
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf
+
+volumes:
+  caddy_data:
+  caddy_config:

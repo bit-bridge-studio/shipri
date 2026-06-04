@@ -1,0 +1,88 @@
+# Open-Source Security & Vulnerability Analysis (Shipri)
+
+Since Project Shipri is open-source, the codebase is public and subject to security audits by developers, security researchers, and potential adversaries. This document provides a vulnerability analysis and security guidelines to ensure the project remains secure and robust.
+
+---
+
+## 1. Secrets Management & Repository Protection
+
+### 1.1. Hardcoded Secrets in Config Files
+* **Risk**: High. Committing credentials (like the Coturn `TURN_SHARED_SECRET`) to a public GitHub repository.
+* **Mitigation**:
+  * We created `.env.example` templates instead of placing keys in code.
+  * A strict `.gitignore` must be placed in the project root to exclude all `.env` files and certificates.
+  * **Mitigation Implementation**:
+    ```text
+    # .gitignore
+    .env
+    .env.local
+    *.pem
+    *.key
+    *.crt
+    node_modules/
+    dist/
+    caddy_data/
+    caddy_config/
+    ```
+
+---
+
+## 2. Cryptographic Architecture Vulnerability Review
+
+Since the encryption logic executes entirely on the client, exposing the code in open-source allows anyone to audit the E2EE implementation. This prevents "security by obscurity" and forces mathematical rigor.
+
+### 2.1. Randomness of Key Generation
+* **Risk**: If the AES-256 keys are generated using predictable random number generators (like `Math.random()`), an attacker could brute-force the keys.
+* **Mitigation**: We strictly use browser CSPRNG APIs for E2EE master secrets: `crypto.getRandomValues(new Uint8Array(32))` for the URL fragment master secret, followed by Web Crypto HKDF-derived AES-GCM keys for metadata and chunks.
+
+### 2.2. IV (Initialization Vector) Reuse in AES-GCM
+* **Risk**: High. In AES-GCM, reusing the same IV with the same key to encrypt two different payloads leaks information about the plaintext and allows an attacker to forge messages.
+* **Mitigation**: We derive separate AES-GCM keys for metadata and file chunks. Metadata uses a random 12-byte IV generated with `crypto.getRandomValues`; file chunks use a deterministic 12-byte incrementing chunk counter with the chunk key. This prevents IV reuse within the same key domain.
+
+### 2.3. Browser Cache and History Leakage
+* **Risk**: The decryption key is passed in the URL hash fragment (`#key=...`). If the browser saves this in history or autocomplete lists, anyone with physical access to the device can access the file link.
+* **Mitigation**: 
+  * The frontend must actively clean up the key from the address bar immediately after extraction using:
+    `window.history.replaceState(null, '', window.location.pathname);`
+    This wipes the key from the active screen and address bar while keeping the connection running in RAM.
+
+---
+
+## 3. Server-Side Attack Surface (DoS & Abuse)
+
+The signaling server handles active WebSocket rooms in-memory. In a public, open-source deployment, this is a prime target for abuse.
+
+### 3.1. In-Memory Room Exhaustion (Memory DoS)
+* **Risk**: A script could spam `room:create` thousands of times, filling the server's `activeRooms` Map and crashing the Node.js process due to memory exhaustion.
+* **Mitigation**:
+  * **Rate Limiting**: Integrate rate-limiting middleware (like `express-rate-limit` for HTTP and custom timers for Socket.IO connection rates).
+  * **Room TTL / Expiry**: Rooms must expire automatically. The server checks and removes rooms older than 15 minutes if no receiver joins, and forces a deletion after 24 hours.
+  * **Memory Limits**: Restrict max room count:
+    ```javascript
+    const MAX_ROOMS = 5000;
+    if (activeRooms.size >= MAX_ROOMS) {
+      socket.emit('room:error', { code: 'SERVER_BUSY', message: 'Server capacity reached. Try again later.' });
+      return;
+    }
+    ```
+  * **CSPRNG Room IDs**: Generate the random suffix of `ship-[a-f0-9]{4}` with Node.js `crypto.randomBytes`, not `Math.random()`.
+
+### 3.2. Socket Room Spoofing / Connection Injection
+* **Risk**: An attacker could join random room IDs or broadcast fake messages.
+* **Mitigation**:
+  * The server enforces a capacity limit of exactly 2.
+  * On `room:join`, the server verifies if `receiverSocketId` is null. If it is already set, it rejects the joining socket.
+  * Regular expressions must validate `roomId` format to prevent malformed socket channel names and injection-style payloads: `/^ship-[a-f0-9]{4}$/`.
+
+---
+
+## 4. Coturn TURN Server Protection
+
+Because the TURN server relays raw file bytes when direct P2P connection fails, it can consume vast amounts of server network bandwidth.
+
+### 4.1. Unauthorized Proxy Usage
+* **Risk**: Attacking bots can scan and find the TURN server and use it to proxy illegal traffic, incurring high costs for the owner.
+* **Mitigation**:
+  * We use **REST API authentication (Time-Limited Tokens)**.
+  * The server never exposes a static login/password.
+  * Coturn only accepts connection requests containing usernames with valid HMAC signatures generated by our signaling server using the private `TURN_SHARED_SECRET`. Any request with an expired timestamp or invalid HMAC is immediately blocked.

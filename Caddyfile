@@ -1,0 +1,20 @@
+# Caddy Configuration for Shipri
+
+# Local development or general HTTP entry
+:80 {
+    # 1. Route Socket.io WebSocket connections
+    reverse_proxy /socket.io/* server:5001
+
+    # 2. Route HTTP health checks
+    reverse_proxy /health server:5001
+
+    # 3. Route all other requests to the static SPA client
+    reverse_proxy * client:80
+}
+
+# Production Domain Configuration (Uncomment and replace with your domain)
+# shipri.app {
+#     reverse_proxy /socket.io/* server:5001
+#     reverse_proxy /health server:5001
+#     reverse_proxy * client:80
+# }
