@@ -4,7 +4,25 @@ This document specifies the containerized deployment architecture for Project Sh
 
 ---
 
-## 1. System Architecture in Docker
+## 1. Early POC Staging Deployment
+
+Before production infrastructure is complete, the Backend POC is deployed to a restricted staging environment so the team can validate real HTTPS/WSS, DNS, reverse-proxy, and remote-network behavior.
+
+The initial POC staging scope includes:
+
+* A dedicated hostname such as `poc.shipri.app`.
+* Caddy HTTPS/WSS termination.
+* The Node.js signaling server and `/health` endpoint.
+* Restricted CORS for approved local and staging prototype origins.
+* No Coturn, production secrets, production traffic, or production-readiness claim.
+
+After the frontend prototype foundation is implemented, it is deployed to the approved staging origin and used to verify Socket.IO and direct WebRTC connectivity between devices on different networks.
+
+POC staging deployment and rollback commands must be documented before the Backend POC Acceptance Gate. Full production deployment remains governed by the sections below.
+
+---
+
+## 2. Production System Architecture in Docker
 
 ```mermaid
 graph TD
@@ -14,7 +32,7 @@ graph TD
     User -->|WebRTC Traffic 3478 UDP/TCP or turn.shipri.app:443 TCP/TLS| Coturn[Coturn TURN Container]
 ```
 
-### 1.1. Container Services:
+### 2.1. Container Services:
 1. **`reverse-proxy` (Caddy)**: Serves as the SSL-terminating entry point. Caddy is chosen over Nginx because it handles SSL certificate generation and auto-renewal (via Let's Encrypt / ZeroSSL) out-of-the-box with zero-config.
 2. **`client` (Nginx/Node)**: A multi-stage build container. React app built using Vite, served by a lightweight Nginx container.
 3. **`server` (Node.js)**: Runs the Socket.IO signaling process.
@@ -22,7 +40,7 @@ graph TD
 
 ---
 
-## 2. Docker Compose Configuration (`docker-compose.yml`)
+## 3. Docker Compose Configuration (`docker-compose.yml`)
 
 The compose file orchestrates the services in the production environment:
 
@@ -82,9 +100,9 @@ volumes:
 
 ---
 
-## 3. Container-Specific Dockerfiles
+## 4. Container-Specific Dockerfiles
 
-### 3.1. Client Dockerfile (`client/Dockerfile`)
+### 4.1. Client Dockerfile (`client/Dockerfile`)
 Uses a multi-stage build to keep production image size under 30MB.
 
 ```dockerfile
@@ -104,7 +122,7 @@ EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 ```
 
-### 3.2. Server Dockerfile (`server/Dockerfile`)
+### 4.2. Server Dockerfile (`server/Dockerfile`)
 ```dockerfile
 FROM node:20-alpine
 WORKDIR /app
@@ -117,7 +135,7 @@ CMD ["node", "src/index.js"]
 
 ---
 
-## 4. Reverse Proxy Setup (`Caddyfile`)
+## 5. Reverse Proxy Setup (`Caddyfile`)
 
 Caddy handles SSL termination automatically for the web app and Socket.IO endpoint. Below is the production `Caddyfile` schema:
 
@@ -135,7 +153,7 @@ shipri.app {
 
 ---
 
-## 5. Deployment Environment Configuration
+## 6. Deployment Environment Configuration
 
 Before running `docker compose up -d` on the server:
 1. Point your domain (e.g., `shipri.app`) to your VPS IP address (A-record).

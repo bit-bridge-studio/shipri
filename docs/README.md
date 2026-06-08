@@ -32,29 +32,39 @@ These conventions resolve conflicts between older specification drafts and must 
 | 📄 **[testing_strategy.md](./testing_strategy.md)** | QA & Testing Strategy. | Unit tests, Integration tests, Playwright E2E WebRTC tests, network condition emulation. | **Completed** |
 | 📄 **[deployment_docker_spec.md](./deployment_docker_spec.md)** | Docker & Deployment architecture. | Multi-stage Dockerfiles, Caddyfile reverse-proxy config, docker-compose orchestrations. | **Completed** |
 | 📄 **[security_audit_open_source.md](./security_audit_open_source.md)** | Open-Source Security & Vulnerability Analysis. | Secrets protection, CSPRNG Web Crypto, IV reuse prevention, room-creation DoS limits, TURN auth. | **Completed** |
+| 📄 **[development_plan.md](./development_plan.md)** | Four-part implementation roadmap. | Backend POC, frontend prototype, full backend, final frontend, acceptance gates. | **Active** |
+| 📄 **[backend_poc_plan.md](./backend_poc_plan.md)** | Minimum deployed backend starting point for frontend prototype development. | Basic rooms, signaling relay, development ICE, staging HTTPS/WSS, POC acceptance gate. | **Active** |
+| 📄 **[frontend_prototype_plan.md](./frontend_prototype_plan.md)** | Diagnostic frontend built after Backend POC acceptance. | POC validation, room controls, WebRTC ping/pong, later ICE and forced-TURN diagnostics. | **Active** |
+| 📄 **[backend_development_plan.md](./backend_development_plan.md)** | Full signaling and infrastructure implementation roadmap. | Room security, TURN credentials, abuse controls, Docker, Caddy, Coturn. | **Active** |
+| 📄 **[frontend_development_plan.md](./frontend_development_plan.md)** | Final product frontend roadmap. | E2EE, file transfer, persistence, product UX, polish, browser E2E. | **Active** |
 
 ---
 
 ## 3. Execution Order
 
-To minimize dependency loops and ambiguity, we will build documents in the following order:
+Implementation proceeds sequentially through four parts:
 
 ```mermaid
 graph TD
-    start[start_point.md] --> data[p2p_data_protocol_spec.md]
-    data --> signaling[signaling_protocol_spec.md]
-    signaling --> security[security_e2ee_spec.md]
-    security --> nat[nat_traversal_strategy.md]
-    nat --> ui[ui_ux_flow_spec.md]
-    ui --> implementation[Code Implementation Phase]
+    contracts[Backend POC Contract] --> poc[Part 1: Backend POC]
+    poc --> pocGate[Backend POC Gate]
+    pocGate --> prototype[Part 2: Frontend Prototype Foundation]
+    prototype --> backend[Part 3: Full Backend]
+    backend --> prototypeExpansion[Prototype Expansion & Acceptance Tests]
+    prototypeExpansion --> gate[Backend Acceptance Gate]
+    gate --> frontend[Part 4: Final Frontend]
+    frontend --> release[Release Gate]
 ```
 
-### Phase 1: Core Protocol Specs
-* Define *how* data flows (P2P spec) and *how* connections are established (Signaling spec).
+### Part 1: Backend POC
+* Build and deploy the minimum tested room, signaling relay, disconnect, and development ICE backend required by the frontend prototype.
+* Frontend prototype implementation is blocked until this part passes its acceptance gate.
 
-### Phase 2: Security & Infrastructure
-* Layer E2EE cryptography on top of data streams to guarantee zero-knowledge privacy.
-* Define STUN/TURN settings to ensure P2P connection success rates exceed 95%.
+### Part 2: Frontend Prototype
+* After the Backend POC gate passes, build and deploy a diagnostic room, Socket.IO, and direct WebRTC test harness. Validate it from remote devices, then expand it with authorization and forced-TURN diagnostics during full backend development.
 
-### Phase 3: Interface & UX
-* Define visual states, progress indicators, and routing logic before launching code implementation.
+### Part 3: Full Backend
+* Build and acceptance-test secure signaling, TURN credentials, abuse protection, and production networking infrastructure.
+
+### Part 4: Final Frontend
+* Build E2EE, bounded-memory file transfer, persistence paths, complete UX, final polish, and browser E2E coverage on the frozen backend contract.
