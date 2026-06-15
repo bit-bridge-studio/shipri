@@ -35,10 +35,6 @@ When I test room behavior, I want stable lifecycle transitions and error codes, 
 - Deferred TTL, rate-limit, and production authorization behavior is explicitly excluded.
 - Relevant protocol and testing documentation is updated.
 
-## Notes
-
-- Depends on ticket 1.
-
 ---
 
 ## 3. Documentation: Define the Backend POC development ICE contract
@@ -51,10 +47,6 @@ When I create a WebRTC connection in the frontend prototype, I want a documented
 - The POC response contains only approved public STUN endpoints.
 - The documentation clearly states that TURN credentials are deferred.
 - Relevant signaling, NAT traversal, and testing documentation is updated.
-
-## Notes
-
-- Depends on ticket 1.
 
 ---
 
@@ -73,7 +65,6 @@ When I implement POC behavior, I want automated unit and Socket.IO integration t
 ## Notes
 
 - Adding Vitest requires explicit dependency approval.
-- Depends on tickets 1 through 3.
 
 ---
 
@@ -87,10 +78,6 @@ The backend server construction and process startup are separated so integration
 - Process startup remains available through the documented `start` and `dev` commands.
 - Tests start the server on an isolated port and close it cleanly.
 - Existing health and Socket.IO connectivity behavior remains available.
-
-## Notes
-
-- Depends on ticket 4.
 
 ---
 
@@ -106,10 +93,6 @@ When I run the Backend POC locally or on staging, I want validated environment-d
 - Configuration tests cover valid and invalid values.
 - No production or placeholder secrets are introduced.
 
-## Notes
-
-- Depends on ticket 5.
-
 ---
 
 ## 7. Feature: Add a verifiable Backend POC health endpoint
@@ -122,10 +105,6 @@ When I run or deploy the Backend POC, I want a stable health endpoint, so local 
 - The endpoint does not expose secrets or private transfer data.
 - Integration tests verify the health response and status code.
 - The health contract is documented for local and staging checks.
-
-## Notes
-
-- Depends on tickets 5 and 6.
 
 ---
 
@@ -141,10 +120,6 @@ When rooms are created or joined, I want canonical validated room IDs, so malfor
 - Unit tests cover valid IDs, malformed IDs, and generation format.
 - Relevant signaling documentation is updated.
 
-## Notes
-
-- Depends on tickets 2, 4, and 5.
-
 ---
 
 ## 9. Feature: Implement Backend POC room creation for the first peer
@@ -158,10 +133,6 @@ When I am the first peer, I want to create a room, so a second equal peer can jo
 - `room:created` returns the documented POC payload.
 - Generated room IDs are unique among active rooms.
 - Integration tests verify successful room creation.
-
-## Notes
-
-- Depends on ticket 8.
 
 ---
 
@@ -178,10 +149,6 @@ When I open an available room, I want to join as an equal second peer and receiv
 - A third peer receives `ROOM_FULL`.
 - Integration tests cover successful join, unknown room, malformed room ID, and third-peer rejection.
 
-## Notes
-
-- Depends on ticket 9.
-
 ---
 
 ## 11. Feature: Implement explicit room leave behavior
@@ -196,10 +163,6 @@ When a connected peer intentionally leaves a room, I want the backend to update 
 - Repeated or unauthorized leave requests return the documented error behavior.
 - Integration tests cover either-peer leave, remaining-peer state, and empty-room cleanup.
 
-## Notes
-
-- Depends on tickets 9 and 10.
-
 ---
 
 ## 12. Fix: Clean up POC rooms and notify peers on disconnect
@@ -213,10 +176,6 @@ When a peer disconnects unexpectedly, I want room state and peer notifications t
 - The room is removed when the final peer disconnects.
 - Disconnected sockets are removed from the Socket.IO room.
 - Integration tests verify cleanup and notifications for both peer positions.
-
-## Notes
-
-- Depends on tickets 9 and 10.
 
 ---
 
@@ -233,10 +192,6 @@ When SDP or ICE data is forwarded, I want only active room members to relay sign
 - Integration tests verify bidirectional relay independent of transfer direction and unauthorized-peer rejection.
 - Security and signaling documentation is updated.
 
-## Notes
-
-- Depends on tickets 8 through 10.
-
 ---
 
 ## 14. Feature: Implement the Backend POC development ICE response
@@ -250,10 +205,6 @@ When the frontend prototype requests ICE configuration, I want the Backend POC t
 - Invalid ICE configuration produces the documented configuration error.
 - Tests verify successful and invalid configuration responses.
 - The response is documented as development-only.
-
-## Notes
-
-- Depends on tickets 3 and 6.
 
 ---
 
@@ -271,7 +222,6 @@ When the POC is ready for remote testing, I want a dedicated restricted staging 
 
 ## Notes
 
-- Depends on tickets 6 and 7.
 - External DNS and server access must be available before implementation.
 
 ---
@@ -288,10 +238,6 @@ When I deploy the Backend POC, I want reproducible server and reverse-proxy conf
 - TURN and production secrets are absent from the POC staging configuration.
 - Configuration validation and deployment smoke checks are documented.
 
-## Notes
-
-- Depends on ticket 15 and completed POC server behavior.
-
 ---
 
 ## 17. Infrastructure: Add Backend POC staging smoke checks
@@ -306,10 +252,6 @@ When the POC staging deployment changes, I want repeatable smoke checks, so brok
 - Smoke checks do not require production secrets.
 - Deployment documentation explains when to run the checks.
 
-## Notes
-
-- Depends on ticket 16.
-
 ---
 
 ## 18. Documentation: Define Backend POC deployment operations
@@ -323,10 +265,6 @@ When I operate the POC staging environment, I want documented deploy, update, ro
 - Log-inspection steps avoid exposing secrets or private payloads.
 - The procedure references the staging smoke checks.
 - The documentation clearly states that the environment is not production-ready.
-
-## Notes
-
-- Depends on tickets 16 and 17.
 
 ---
 
@@ -345,5 +283,4 @@ When frontend prototype development is ready to begin, I want the Backend POC ac
 
 ## Notes
 
-- Depends on tickets 1 through 18.
 - Completing this ticket allows `frontend_prototype_plan.md` implementation to begin.

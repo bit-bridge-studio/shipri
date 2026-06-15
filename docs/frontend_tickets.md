@@ -21,10 +21,6 @@ When I build the diagnostic prototype, I want the accepted two-peer POC contract
 - Prototype-only behavior is separated from production authorization, E2EE, file-board, and transfer behavior.
 - Relevant prototype, signaling, and testing documents are synchronized.
 
-## Notes
-
-- Dependencies: Backend POC tickets 1 through 19.
-
 ---
 
 ## 2. Chore: Add the frontend prototype test foundation
@@ -38,10 +34,6 @@ When I implement prototype behavior, I want frontend unit tests and clean instal
 - Test utilities mock Socket.IO without a live backend.
 - `testing_strategy.md` documents the setup.
 
-## Notes
-
-- Dependencies: ticket 1. New test dependencies require approval.
-
 ---
 
 ## 3. Refactoring: Isolate the Socket.IO client from React rendering
@@ -54,10 +46,6 @@ The Socket.IO lifecycle is isolated so UI modules consume stable connection, eve
 - Events are normalized without logging secrets or private transfer data.
 - Unit tests cover connection, subscription, cleanup, and errors.
 
-## Notes
-
-- Dependencies: ticket 2.
-
 ---
 
 ## 4. Feature: Build the diagnostic prototype shell and event log
@@ -69,10 +57,6 @@ When I test the backend, I want membership, negotiation, connection, and event s
 - The UI displays connection state, room ID, peer state, negotiation duty, and last error.
 - The chronological event log sanitizes payloads and secrets.
 - Unit tests cover rendering, append, clear, and sanitization.
-
-## Notes
-
-- Dependencies: ticket 3.
 
 ---
 
@@ -87,10 +71,6 @@ When I test rooms, I want either browser to create, join, and leave, so equal-pe
 - Creator/joiner and offerer/answerer duties are displayed without implying transfer roles.
 - Unit tests cover create, join, either-peer leave, peer notifications, and reset.
 
-## Notes
-
-- Dependencies: ticket 4.
-
 ---
 
 ## 6. Feature: Surface stable POC room errors and validation scenarios
@@ -103,10 +83,6 @@ When I validate failures, I want stable room errors and malformed-input cases vi
 - The event log remains sanitized and recovery resets only relevant state.
 - Unit tests cover known errors, fallback errors, malformed input, and recovery.
 
-## Notes
-
-- Dependencies: ticket 5.
-
 ---
 
 ## 7. Feature: Add development ICE configuration diagnostics
@@ -118,10 +94,6 @@ When I initialize WebRTC, I want to inspect the accepted development ICE respons
 - The prototype requests and validates `ice:credentials`.
 - Sanitized ICE counts and schemes are visible.
 - Unit tests cover success, malformed responses, and failures.
-
-## Notes
-
-- Dependencies: tickets 3 and 4.
 
 ---
 
@@ -136,10 +108,6 @@ When two prototype peers connect, I want deterministic offer/answer and bidirect
 - Connection and signaling states are visible and tested.
 - Documentation states that negotiation duty never restricts application messages.
 
-## Notes
-
-- Dependencies: tickets 5 and 7.
-
 ---
 
 ## 9. Feature: Add bidirectional diagnostic data-channel messaging
@@ -151,10 +119,6 @@ When the diagnostic channel opens, I want either peer to initiate ping/pong and 
 - The offerer creates one reliable diagnostic channel and the answerer accepts it.
 - Either peer can initiate ping/pong and short text exchange.
 - Unit tests cover both directions, state, errors, and cleanup.
-
-## Notes
-
-- Dependencies: ticket 8.
 
 ---
 
@@ -168,10 +132,6 @@ When the Backend POC is on staging, I want the diagnostic frontend deployed for 
 - Two remote peers create, join, negotiate, and exchange messages.
 - `npm run build` passes and deployment documents are updated.
 
-## Notes
-
-- Dependencies: ticket 9 and Backend POC staging tickets 15 through 19.
-
 ---
 
 ## 11. Chore: Complete the frontend prototype foundation gate
@@ -183,10 +143,6 @@ When the foundation is complete, I want every accepted POC behavior validated th
 - Create, join, either-peer leave/disconnect, errors, ICE, signaling, and bidirectional messages pass locally and on staging.
 - Unit tests and `npm run build` pass.
 - Prototype limitations are documented.
-
-## Notes
-
-- Dependencies: tickets 1 through 10.
 
 ---
 
@@ -201,10 +157,6 @@ When production TURN is available, I want direct and relay modes visible and tes
 - Bidirectional messages pass in direct and forced-relay modes.
 - Unit tests and NAT/testing documents are updated.
 
-## Notes
-
-- Dependencies: ticket 11 and full backend stages `BE-4` and `BE-6`.
-
 ---
 
 ## 13. Chore: Complete the prototype backend acceptance scenarios
@@ -216,10 +168,6 @@ When the full backend is ready, I want the prototype to exercise every required 
 - Authorized equal-peer lifecycle, third-peer rejection, unauthorized signaling, cleanup, direct connectivity, and forced TURN pass.
 - Tests, build, local evidence, and staging evidence are recorded.
 - Prototype-only modules are identified.
-
-## Notes
-
-- Dependencies: ticket 12 and full backend stages `BE-2` through `BE-6`.
 
 ---
 
@@ -236,10 +184,6 @@ When final frontend work begins, I want the shared file-board and transfer contr
 - Backend boundaries explicitly exclude board and transfer state.
 - Security, P2P, UX, testing, and frontend plan documents are synchronized.
 
-## Notes
-
-- Dependencies: full backend `BE-7`.
-
 ---
 
 ## 15. Refactoring: Isolate reusable production-safe peer connection modules
@@ -251,10 +195,6 @@ The frontend extracts production-safe signaling and WebRTC modules without diagn
 - Modules consume equal-peer room, authorization, ICE, and negotiation contracts.
 - Prototype logs and diagnostic controls are excluded from production routes.
 - Unit tests cover initialization, cleanup, reconnect hooks, and error propagation.
-
-## Notes
-
-- Dependencies: ticket 14.
 
 ---
 
@@ -269,10 +209,6 @@ When either peer creates or joins a production room, I want room authorization h
 - Invalid or expired authorization fails safely without logging tokens.
 - Unit tests and security/signaling documentation are updated.
 
-## Notes
-
-- Dependencies: ticket 15 and the frozen backend authorization contract.
-
 ---
 
 ## 17. Security: Implement URL fragment key lifecycle
@@ -285,10 +221,6 @@ When peers share a room link, I want the master key generated, encoded, extracte
 - The joining peer extracts and immediately removes the fragment.
 - Missing or malformed keys fail safely and key material never enters requests or logs.
 - Unit tests and security documentation are updated.
-
-## Notes
-
-- Dependencies: ticket 16.
 
 ---
 
@@ -303,10 +235,6 @@ When either peer advertises a local file, I want its metadata encrypted before i
 - Plaintext filename, size, and type never enter Socket.IO or logs.
 - Unit tests cover round trips, tampering, validation, and metadata leakage.
 
-## Notes
-
-- Dependencies: ticket 17.
-
 ---
 
 ## 19. Security: Implement authenticated transfer control messages
@@ -319,10 +247,6 @@ When peers request and control downloads, I want every control message validated
 - Messages bind to room, file, transfer, direction, and epoch where applicable.
 - Unknown, stale, forged, cross-transfer, and malformed messages fail closed.
 - Unit tests and protocol/security documentation are updated.
-
-## Notes
-
-- Dependencies: tickets 14 and 18.
 
 ---
 
@@ -337,10 +261,6 @@ When either peer owns a requested file, I want chunks framed and encrypted witho
 - Invalid headers, tags, directions, epochs, or chunk order fail closed.
 - Unit tests cover framing, round trips, tampering, boundaries, and epoch separation.
 
-## Notes
-
-- Dependencies: ticket 19.
-
 ---
 
 ## 21. Feature: Build the production equal-peer WebRTC connection
@@ -353,10 +273,6 @@ When two authorized peers enter a room, I want production control and binary cha
 - Either peer can initiate authenticated control messages.
 - Connection and relay states propagate without diagnostic payload exposure.
 - Unit tests and frontend documentation are updated.
-
-## Notes
-
-- Dependencies: tickets 15 through 20.
 
 ---
 
@@ -371,10 +287,6 @@ When I add files to my room board, I want the remote peer to see encrypted adver
 - Removing an advertisement updates the remote board and does not implicitly cancel active transfers.
 - Unit tests cover add, duplicate, remove, unavailable file, and cleanup.
 
-## Notes
-
-- Dependencies: tickets 18, 19, and 21.
-
 ---
 
 ## 23. Feature: Synchronize the remote file board
@@ -387,10 +299,6 @@ When peers connect or reconnect, I want each board to converge on currently avai
 - Snapshot/replay behavior converges without duplicate or stale entries.
 - A disconnected owner's entries become unavailable and follow the reconnect expiry rule.
 - Unit tests cover initial sync, updates, disconnect, reconnect, stale data, and decryption failure.
-
-## Notes
-
-- Dependencies: ticket 22.
 
 ---
 
@@ -406,10 +314,6 @@ When I click a remote file, I want the save path prepared before requesting byte
 - Owners accept available files and reject missing, removed, busy, or invalid requests.
 - Unit tests cover request, acceptance, rejection, cancellation, and duplicate requests.
 
-## Notes
-
-- Dependencies: tickets 19, 21, and 23.
-
 ---
 
 ## 25. Feature: Implement bounded owner-side encrypted chunk streaming
@@ -422,10 +326,6 @@ When a peer accepts a download request, I want the local file streamed with boun
 - `bufferedAmount` high/low watermarks stop and resume reads.
 - Missing or changed local files fail only the affected transfer.
 - Unit tests cover boundaries, backpressure, cancellation, completion, and read/encryption failure.
-
-## Notes
-
-- Dependencies: tickets 20 and 24.
 
 ---
 
@@ -441,10 +341,6 @@ When I download a remote file, I want encrypted chunks written to disk without a
 - Completion closes the target only after all chunks are persisted.
 - Unit tests cover queue watermarks, writes, cancellation, completion, and failures.
 
-## Notes
-
-- Dependencies: tickets 20, 24, and 25.
-
 ---
 
 ## 27. Feature: Implement independent transfer progress and controls
@@ -457,10 +353,6 @@ When files move in either direction, I want each transfer controlled and display
 - Simultaneous opposite-direction transfers do not share state or controls.
 - Cancelling or failing one transfer does not affect another or remove its advertisement.
 - Unit tests and UX documentation are updated.
-
-## Notes
-
-- Dependencies: tickets 25 and 26.
 
 ---
 
@@ -475,10 +367,6 @@ When I enter a production room, I want to share local files and download remote 
 - Keyboard, focus, status announcements, responsive layouts, and error copy are included.
 - Unit tests and UX/security documentation are updated.
 
-## Notes
-
-- Dependencies: tickets 16 through 27. QR dependency requires approval.
-
 ---
 
 ## 29. Feature: Implement board reconnection and safe transfer resume
@@ -491,10 +379,6 @@ When connectivity returns, I want board state restored and eligible transfers re
 - Board state converges after reconnect.
 - Resume authenticates transfer state, uses the last persisted chunk, and rotates epoch keys.
 - Unit tests cover reconnect success/exhaustion, stale resume, duplicate chunks, and output integrity.
-
-## Notes
-
-- Dependencies: tickets 23, 26, 27, and 28.
 
 ---
 
@@ -509,10 +393,6 @@ When I click a remote file, I want an accurate supported persistence path and si
 - Service Worker streaming and IndexedDB remain documented future extensions until separately approved.
 - Unit tests and browser-support documentation are updated.
 
-## Notes
-
-- Dependencies: tickets 24, 26, and 28.
-
 ---
 
 ## 31. Chore: Add approved Playwright peer-room E2E setup
@@ -524,10 +404,6 @@ When the production board is testable, I want separate browser contexts and dete
 - The approved Playwright setup launches two isolated peer contexts.
 - Tests can provide deterministic files and persistence stubs without private fixtures or production secrets.
 - Local instructions and browser limitations are documented.
-
-## Notes
-
-- Dependencies: ticket 28. Adding Playwright requires approval.
 
 ---
 
@@ -541,10 +417,6 @@ When the frontend nears release, I want browser coverage for the shared board an
 - Separate scenarios cover errors, reconnect/resume, forced TURN, and absence of keys/plaintext metadata in backend-visible traffic.
 - Frontend tests, E2E tests, build, and testing documentation pass.
 
-## Notes
-
-- Dependencies: tickets 29 through 31 and production TURN availability.
-
 ---
 
 ## 33. Chore: Complete final frontend release gate
@@ -557,7 +429,3 @@ When all frontend features are implemented, I want a release gate proving that t
 - Accessibility, responsiveness, memory bounds, transfer performance, browser limits, and security checks pass.
 - The backend is verified to receive no board state, file requests, plaintext metadata, file contents, or E2EE keys.
 - Tests, build, release evidence, and all relevant documentation are synchronized.
-
-## Notes
-
-- Dependencies: tickets 14 through 32.
