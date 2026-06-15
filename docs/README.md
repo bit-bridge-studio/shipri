@@ -38,6 +38,7 @@ These conventions resolve conflicts between older specification drafts and must 
 | 📄 **[frontend_prototype_plan.md](./frontend_prototype_plan.md)** | Diagnostic frontend built after Backend POC acceptance. | POC validation, room controls, WebRTC ping/pong, later ICE and forced-TURN diagnostics. | **Active** |
 | 📄 **[backend_development_plan.md](./backend_development_plan.md)** | Full signaling and infrastructure implementation roadmap. | Room security, TURN credentials, abuse controls, Docker, Caddy, Coturn. | **Active** |
 | 📄 **[frontend_development_plan.md](./frontend_development_plan.md)** | Final product frontend roadmap. | E2EE, file transfer, persistence, product UX, polish, browser E2E. | **Active** |
+| 📄 **[frontend_tickets.md](./frontend_tickets.md)** | Atomic frontend implementation backlog. | Frontend prototype tickets, final frontend tickets, dependencies, acceptance gates. | **Active** |
 
 ---
 
