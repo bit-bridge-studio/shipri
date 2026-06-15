@@ -1,13 +1,10 @@
 # Frontend Ticket Backlog
 
-These ticket drafts implement `frontend_prototype_plan.md` and `frontend_development_plan.md` in dependency order. They are drafted from the current documentation and the existing Backend POC ticket backlog.
+These atomic tickets implement `frontend_prototype_plan.md` and `frontend_development_plan.md` in dependency order.
 
-Published GitHub issues: #20 through #52.
+Existing GitHub issues targeted for synchronization: #20 through #52. Ticket 1 maps to issue #20 and ticket 33 maps to issue #52.
 
-The frontend backlog is intentionally split into two phases:
-
-1. **Frontend Prototype**: a diagnostic harness that starts only after the Backend POC acceptance gate passes.
-2. **Final Frontend**: the production Shipri user experience that starts only after the full backend acceptance gate freezes room authorization, Socket.IO, ICE, deployment, and transfer contracts.
+The production architecture is a two-peer room with an encrypted shared file board. Creator/joiner and offerer/answerer duties never determine file-transfer direction.
 
 ---
 
@@ -15,674 +12,552 @@ The frontend backlog is intentionally split into two phases:
 
 ## 1. Documentation: Freeze the frontend prototype POC contract
 
-When I build the diagnostic frontend prototype, I want the accepted Backend POC event contract mapped to frontend actions, so the prototype does not rely on mocks or undocumented signaling behavior.
+When I build the diagnostic prototype, I want the accepted two-peer POC contract mapped to frontend actions, so the prototype does not rely on mocks or transfer-role assumptions.
 
 ## Acceptance Criteria
 
-- The frontend prototype contract lists every consumed Backend POC event, payload shape, room error code, and lifecycle transition.
-- The contract uses canonical `roomId` camelCase payload naming and `ship-[a-f0-9]{4}` room IDs.
-- Prototype-only behavior is clearly separated from production room authorization, E2EE, TURN, file-transfer, and persistence behavior.
-- `frontend_prototype_plan.md`, `signaling_protocol_spec.md`, and `testing_strategy.md` are synchronized with the accepted Backend POC contract.
+- Every consumed Backend POC event, payload, error, lifecycle transition, and negotiation duty is documented.
+- Both members are described as equal peers; offerer/answerer duties are signaling-only.
+- Prototype-only behavior is separated from production authorization, E2EE, file-board, and transfer behavior.
+- Relevant prototype, signaling, and testing documents are synchronized.
 
 ## Notes
 
-- Dependencies: Backend POC tickets 1 through 19 are complete and the POC event contract is frozen.
-- Excluded scope: React implementation, WebRTC negotiation, final frontend UX, and E2EE file transfer.
-- Context: This is the frontend counterpart to `backend_poc_tickets.md` ticket 19.
+- Dependencies: Backend POC tickets 1 through 19.
 
 ---
 
 ## 2. Chore: Add the frontend prototype test foundation
 
-When I implement prototype behavior, I want frontend unit tests and a clean install workflow, so room state and diagnostic UI regressions are caught before WebRTC work begins.
+When I implement prototype behavior, I want frontend unit tests and clean installation, so room and diagnostic regressions are caught early.
 
 ## Acceptance Criteria
 
-- The approved Vitest frontend dependency and `client` `test` script are configured.
-- A client package lockfile is committed and `npm ci` succeeds from a clean checkout.
-- Test utilities can render React components and mock Socket.IO client behavior without connecting to a live backend.
-- A baseline frontend test suite runs successfully.
-- `testing_strategy.md` documents the active frontend prototype test setup.
+- The approved Vitest setup and `client` `test` script are configured.
+- `npm ci`, baseline tests, and `npm run build` pass.
+- Test utilities mock Socket.IO without a live backend.
+- `testing_strategy.md` documents the setup.
 
 ## Notes
 
-- Dependencies: ticket 1.
-- Excluded scope: Playwright, browser E2E tests, production file-transfer tests, and unapproved dependencies.
-- Context: Adding Vitest requires explicit dependency approval before implementation.
+- Dependencies: ticket 1. New test dependencies require approval.
 
 ---
 
 ## 3. Refactoring: Isolate the Socket.IO client from React rendering
 
-The frontend Socket.IO connection lifecycle is isolated from React components so prototype screens can subscribe to stable connection, event, and error state without duplicating socket handlers.
+The Socket.IO lifecycle is isolated so UI modules consume stable connection, event, and error state.
 
 ## Acceptance Criteria
 
-- Socket.IO client creation, connection, disconnection, event subscription, and cleanup live in a reusable client module or hook.
-- The module supports the documented local and staging signaling URLs through environment configuration.
-- Socket events are normalized into state transitions and event-log entries without logging secrets or file data.
-- Unit tests cover connect, disconnect, event subscription, cleanup, and configuration behavior using mocked Socket.IO clients.
-- Existing visible connection status behavior remains available in the app shell.
+- Connection, subscriptions, cleanup, and environment configuration live outside rendering components.
+- Events are normalized without logging secrets or private transfer data.
+- Unit tests cover connection, subscription, cleanup, and errors.
 
 ## Notes
 
 - Dependencies: ticket 2.
-- Excluded scope: Room lifecycle controls, WebRTC negotiation, and production authorization tokens.
-- Context: The current `client/src/App.jsx` connects directly inside the component.
 
 ---
 
 ## 4. Feature: Build the diagnostic prototype shell and event log
 
-When I use the prototype during backend development, I want a diagnostic UI with role, connection state, action controls, and an event log, so Socket.IO behavior is visible without browser developer tools.
+When I test the backend, I want membership, negotiation, connection, and event state visible without developer tools.
 
 ## Acceptance Criteria
 
-- The prototype UI displays signaling connection state, selected role, active room ID, peer state, and last error code.
-- The UI includes a chronological event log for emitted and received Socket.IO events.
-- Event-log entries include event names, direction, timestamps, and sanitized payload summaries.
-- The event log avoids file contents, E2EE keys, plaintext metadata, TURN shared secrets, and unnecessary identifying data.
-- Unit tests cover event-log append, clear, sanitization, and connection-state rendering.
-- `frontend_prototype_plan.md` documents the diagnostic shell behavior.
+- The UI displays connection state, room ID, peer state, negotiation duty, and last error.
+- The chronological event log sanitizes payloads and secrets.
+- Unit tests cover rendering, append, clear, and sanitization.
 
 ## Notes
 
 - Dependencies: ticket 3.
-- Excluded scope: Room create/join/leave behavior, WebRTC negotiation, production UI polish, and responsive release work.
 
 ---
 
-## 5. Feature: Implement POC room lifecycle controls
+## 5. Feature: Implement POC peer room lifecycle controls
 
-When I test Backend POC rooms, I want controls for creating, joining, and leaving rooms, so two browser clients can exercise the accepted room lifecycle.
+When I test rooms, I want either browser to create, join, and leave, so equal-peer lifecycle behavior is visible.
 
 ## Acceptance Criteria
 
-- A host can emit `room:create` and display the returned `roomId`.
-- A receiver can enter a canonical room ID and emit `room:join`.
-- Either connected peer can emit `room:leave` and the UI returns to the documented prototype state.
-- The host UI updates when `peer:joined` is received.
-- The receiver UI updates when `room:joined` is received.
-- Unit tests cover successful create, join, leave, peer-joined, and state reset behavior with mocked socket events.
-- `frontend_prototype_plan.md` documents the implemented room lifecycle controls.
+- A first peer creates a room and a second peer joins it.
+- Either peer can leave while the remaining peer stays in the room.
+- Creator/joiner and offerer/answerer duties are displayed without implying transfer roles.
+- Unit tests cover create, join, either-peer leave, peer notifications, and reset.
 
 ## Notes
 
 - Dependencies: ticket 4.
-- Excluded scope: Production share links, URL fragment keys, authorization tokens, and encrypted metadata.
 
 ---
 
 ## 6. Feature: Surface stable POC room errors and validation scenarios
 
-When I validate Backend POC failures, I want room errors and malformed-input cases to be visible in the prototype, so stable error handling can be verified manually.
+When I validate failures, I want stable room errors and malformed-input cases visible in the prototype.
 
 ## Acceptance Criteria
 
-- The UI displays `room:error` codes and messages for unknown rooms, full rooms, malformed room IDs, host disconnects, receiver disconnects, and validation failures.
-- The event log records room errors without exposing private payload data.
-- A clearly prototype-only validation panel can emit malformed or edge-case room IDs for manual backend validation.
-- Successful recovery from an error resets only the relevant diagnostic state.
-- Unit tests cover supported room error codes, unknown error fallback, malformed-input controls, and recovery behavior.
-- `frontend_prototype_plan.md` and `testing_strategy.md` document the manual error scenarios.
+- The UI handles unknown, full, malformed, unauthorized, unavailable-peer, and disconnect cases.
+- The event log remains sanitized and recovery resets only relevant state.
+- Unit tests cover known errors, fallback errors, malformed input, and recovery.
 
 ## Notes
 
 - Dependencies: ticket 5.
-- Excluded scope: Production error copy, final accessibility review, and abuse-control scenarios that belong to full backend development.
 
 ---
 
 ## 7. Feature: Add development ICE configuration diagnostics
 
-When I create a prototype WebRTC connection, I want to request and inspect development ICE configuration, so `RTCPeerConnection` initialization uses the accepted backend response.
+When I initialize WebRTC, I want to inspect the accepted development ICE response without exposing credentials.
 
 ## Acceptance Criteria
 
-- The prototype can emit `ice:get` and store the received `ice:credentials` payload.
-- The UI displays sanitized ICE server counts and URL schemes without exposing credentials in logs unnecessarily.
-- Missing, malformed, or failed ICE responses produce visible diagnostic errors.
-- The WebRTC setup path uses the received ICE configuration instead of hard-coded client values.
-- Unit tests cover successful ICE response handling, malformed response handling, and diagnostic error rendering.
-- `frontend_prototype_plan.md`, `nat_traversal_strategy.md`, and `testing_strategy.md` document the prototype ICE diagnostics.
+- The prototype requests and validates `ice:credentials`.
+- Sanitized ICE counts and schemes are visible.
+- Unit tests cover success, malformed responses, and failures.
 
 ## Notes
 
 - Dependencies: tickets 3 and 4.
-- Excluded scope: Production TURN credentials, forced relay mode, and final frontend relay warnings.
 
 ---
 
-## 8. Feature: Implement the WebRTC signaling harness
+## 8. Feature: Implement the equal-peer WebRTC signaling harness
 
-When two prototype clients are in a room, I want native WebRTC offer, answer, and ICE candidate exchange through Socket.IO, so the prototype validates the backend signaling relay.
+When two prototype peers connect, I want deterministic offer/answer and bidirectional ICE exchange, so signaling is validated independently from transfer direction.
 
 ## Acceptance Criteria
 
-- The host creates an `RTCPeerConnection` with the development ICE configuration and emits SDP offers through `signal:forward`.
-- The receiver applies offers, creates answers, and emits answers through `signal:forward`.
-- Both peers forward local ICE candidates and apply received remote candidates from `signal:receive`.
-- The UI displays ICE gathering, signaling, peer connection, and ICE connection states.
-- Signaling payloads are summarized in diagnostics without exposing unnecessary SDP details by default.
-- Unit tests cover signaling state transitions and `signal:forward` payload construction with mocked WebRTC objects.
-- `frontend_prototype_plan.md` and `signaling_protocol_spec.md` stay synchronized with the implemented harness.
+- The documented offerer creates the initial connection and the answerer responds.
+- Both peers forward and apply ICE candidates.
+- Connection and signaling states are visible and tested.
+- Documentation states that negotiation duty never restricts application messages.
 
 ## Notes
 
 - Dependencies: tickets 5 and 7.
-- Excluded scope: Data-channel messaging, production E2EE, file metadata exchange, and TURN-only diagnostics.
 
 ---
 
-## 9. Feature: Add diagnostic data-channel ping and text exchange
+## 9. Feature: Add bidirectional diagnostic data-channel messaging
 
-When a WebRTC connection opens, I want a reliable diagnostic data channel with ping/pong and short text messages, so the prototype proves browser-to-browser data flow through the negotiated connection.
+When the diagnostic channel opens, I want either peer to initiate ping/pong and text messages.
 
 ## Acceptance Criteria
 
-- The host creates one reliable diagnostic data channel after room join.
-- The receiver accepts the diagnostic data channel and reports its open, close, and error states.
-- Either peer can send a ping and receive a pong with visible latency timing.
-- Either peer can send a short text payload that appears in the peer's diagnostic log.
-- Data-channel diagnostics do not send real user files, plaintext metadata, E2EE keys, or production transfer messages.
-- Unit tests cover data-channel state handling, ping/pong timing, text-message logging, and cleanup on disconnect.
-- `frontend_prototype_plan.md` and `testing_strategy.md` document the two-tab data-channel scenario.
+- The offerer creates one reliable diagnostic channel and the answerer accepts it.
+- Either peer can initiate ping/pong and short text exchange.
+- Unit tests cover both directions, state, errors, and cleanup.
 
 ## Notes
 
 - Dependencies: ticket 8.
-- Excluded scope: `shipri-control`, `shipri-binary`, encrypted metadata, file chunks, pause, resume, and persistence.
 
 ---
 
 ## 10. Infrastructure: Deploy the frontend prototype to POC staging
 
-When the Backend POC is available on staging, I want the diagnostic frontend deployed to the approved staging origin, so remote devices can validate HTTPS, WSS, and direct WebRTC behavior.
+When the Backend POC is on staging, I want the diagnostic frontend deployed for remote HTTPS/WSS and WebRTC checks.
 
 ## Acceptance Criteria
 
-- The prototype build can be deployed to the approved POC staging origin using documented commands.
-- The deployed prototype connects to the staging Backend POC through WSS using environment-driven configuration.
-- CORS and origin expectations match the Backend POC staging documentation.
-- Two remote devices can create, join, negotiate, and exchange diagnostic ping/pong messages through staging.
-- Deployment, update, rollback, and smoke-check steps are documented.
-- `npm run build` succeeds for the deployed client.
-- `deployment_docker_spec.md`, `frontend_prototype_plan.md`, and `testing_strategy.md` document the staging prototype workflow.
+- The documented build, deploy, rollback, and smoke checks work.
+- Two remote peers create, join, negotiate, and exchange messages.
+- `npm run build` passes and deployment documents are updated.
 
 ## Notes
 
 - Dependencies: ticket 9 and Backend POC staging tickets 15 through 19.
-- Excluded scope: Production deployment, Coturn, production secrets, production frontend route, and final UI polish.
-- Context: External DNS and server access must be available before implementation.
 
 ---
 
 ## 11. Chore: Complete the frontend prototype foundation gate
 
-When the prototype foundation is complete, I want every accepted Backend POC event validated through the UI, so full backend development can begin with a real browser harness.
+When the foundation is complete, I want every accepted POC behavior validated through the prototype.
 
 ## Acceptance Criteria
 
-- The prototype validates room creation, join, leave, disconnect notifications, stable errors, development ICE, signaling relay, and data-channel ping/pong.
-- Local two-tab checks pass against the accepted Backend POC.
-- Staging two-device checks pass through HTTPS/WSS and direct WebRTC where the network allows it.
-- Frontend unit tests and `npm run build` pass.
-- The documented prototype limitations clearly state that E2EE, real file transfer, persistence, production authorization, and final UX are not implemented.
-- `frontend_prototype_plan.md` records the completed acceptance evidence.
+- Create, join, either-peer leave/disconnect, errors, ICE, signaling, and bidirectional messages pass locally and on staging.
+- Unit tests and `npm run build` pass.
+- Prototype limitations are documented.
 
 ## Notes
 
 - Dependencies: tickets 1 through 10.
-- Excluded scope: Full backend forced-TURN validation and final frontend development.
-- Context: Completing this ticket allows `backend_development_plan.md` Part 3 to begin.
 
 ---
 
 ## 12. Feature: Add NAT and forced-TURN diagnostics to the prototype
 
-When full backend TURN credentials are available, I want selectable direct and relay ICE modes, so the prototype can validate both direct and forced-TURN connectivity.
+When production TURN is available, I want direct and relay modes visible and testable.
 
 ## Acceptance Criteria
 
-- The prototype supports `iceTransportPolicy` modes `all` and `relay`.
-- The UI displays gathered candidate types and the selected connection candidate pair where the browser exposes it.
-- The UI clearly reports whether the active connection is direct or relayed.
-- TURN credential or connectivity failures produce visible diagnostic errors without exposing `TURN_SHARED_SECRET`.
-- Local and staging checks verify data-channel ping/pong in normal and forced-relay modes.
-- Unit tests cover ICE mode selection, candidate summary rendering, and TURN error states with mocked WebRTC stats.
-- `frontend_prototype_plan.md`, `nat_traversal_strategy.md`, and `testing_strategy.md` document the NAT diagnostics.
+- The prototype supports `iceTransportPolicy` values `all` and `relay`.
+- Candidate and selected-path summaries avoid credential leakage.
+- Bidirectional messages pass in direct and forced-relay modes.
+- Unit tests and NAT/testing documents are updated.
 
 ## Notes
 
 - Dependencies: ticket 11 and full backend stages `BE-4` and `BE-6`.
-- Excluded scope: Production transfer UI, file chunks, E2EE, and release Playwright coverage.
 
 ---
 
 ## 13. Chore: Complete the prototype backend acceptance scenarios
 
-When the full backend is ready for acceptance, I want the prototype to exercise every required backend scenario, so the final frontend can start from a frozen contract.
+When the full backend is ready, I want the prototype to exercise every required backend scenario.
 
 ## Acceptance Criteria
 
-- The prototype verifies authorized room lifecycle, stable validation errors, third-peer rejection, unauthorized signaling rejection, disconnect cleanup, direct connectivity, and forced-TURN connectivity.
-- The prototype exposes backend acceptance scenarios without requiring browser developer tools.
-- Frontend unit tests and `npm run build` pass.
-- Manual local and staging scenario results are documented.
-- Prototype-only modules and controls are clearly identified for later removal or isolation from the production route.
-- `frontend_prototype_plan.md` records the completed `FP-6` acceptance evidence.
+- Authorized equal-peer lifecycle, third-peer rejection, unauthorized signaling, cleanup, direct connectivity, and forced TURN pass.
+- Tests, build, local evidence, and staging evidence are recorded.
+- Prototype-only modules are identified.
 
 ## Notes
 
 - Dependencies: ticket 12 and full backend stages `BE-2` through `BE-6`.
-- Excluded scope: Production E2EE, production file transfer, final UX, and Playwright release tests.
-- Context: Completing this ticket unblocks full backend `BE-7` and later final frontend work.
 
 ---
 
 ## Final Frontend Tickets
 
-## 14. Documentation: Freeze the production frontend architecture
+## 14. Documentation: Freeze the encrypted peer-room architecture
 
-When final frontend development begins, I want the production state machine, module boundaries, and transfer contracts frozen, so implementation does not inherit prototype-only shortcuts.
+When final frontend work begins, I want the shared file-board and transfer contracts frozen, so implementation does not inherit sender/receiver assumptions.
 
 ## Acceptance Criteria
 
-- The production frontend state machine covers file selection, waiting/share link, receiver acceptance, connecting, transferring, reconnecting, completed, cancelled, and failed states.
-- Production module boundaries are documented for signaling, WebRTC, crypto, transfer control, persistence, UI state, and diagnostics.
-- Every production network message and data-channel message is documented.
-- The browser support matrix, transfer-control protocol, backpressure rules, and resume encryption epochs are resolved before implementation starts.
-- Prototype diagnostics are explicitly removed from or isolated outside the production user route.
-- `frontend_development_plan.md`, `p2p_data_protocol_spec.md`, `security_e2ee_spec.md`, `ui_ux_flow_spec.md`, and `testing_strategy.md` are synchronized.
+- State machines cover room membership, board synchronization, file availability, and independent transfer sessions.
+- Control messages, binary framing, authorization, flow control, resume epochs, and browser limits are documented.
+- Backend boundaries explicitly exclude board and transfer state.
+- Security, P2P, UX, testing, and frontend plan documents are synchronized.
 
 ## Notes
 
-- Dependencies: full backend `BE-7` passes and contracts are frozen.
-- Excluded scope: React implementation, crypto implementation, file transfer, and Playwright setup.
+- Dependencies: full backend `BE-7`.
 
 ---
 
-## 15. Refactoring: Isolate reusable production-safe prototype modules
+## 15. Refactoring: Isolate reusable production-safe peer connection modules
 
-The frontend extracts only production-safe signaling and WebRTC code from the prototype so final product screens do not depend on diagnostic UI state or insecure shortcuts.
+The frontend extracts production-safe signaling and WebRTC modules without diagnostic UI dependencies.
 
 ## Acceptance Criteria
 
-- Reusable signaling code consumes the frozen production room authorization and Socket.IO contracts.
-- Reusable WebRTC code supports the documented production ICE configuration and connection-state reporting.
-- Prototype-only event logs, malformed-input controls, ping/pong controls, and raw diagnostic payload views are excluded from the production route.
-- Unit tests cover production module initialization, cleanup, and error propagation without diagnostic UI dependencies.
-- Documentation identifies which prototype modules are retained, changed, or discarded.
+- Modules consume equal-peer room, authorization, ICE, and negotiation contracts.
+- Prototype logs and diagnostic controls are excluded from production routes.
+- Unit tests cover initialization, cleanup, reconnect hooks, and error propagation.
 
 ## Notes
 
 - Dependencies: ticket 14.
-- Excluded scope: E2EE, file transfer, final visual implementation, and browser E2E tests.
 
 ---
 
-## 16. Security: Implement URL fragment key lifecycle
+## 16. Security: Implement production room authorization lifecycle
 
-When a sender creates a production room and a receiver opens a share link, I want the frontend to generate, encode, extract, and remove the master key safely, so the key never reaches the backend or remains visible in the address bar.
+When either peer creates or joins a production room, I want room authorization handled independently from the short room ID.
 
 ## Acceptance Criteria
 
-- The sender generates a 256-bit master key with `crypto.getRandomValues`.
-- The generated share URL uses URL-safe Base64 key encoding in the fragment.
-- The receiver extracts the key from `window.location.hash` and removes the fragment with `window.history.replaceState`.
-- Invalid, missing, or malformed keys produce a safe user-visible error state.
-- No key material is sent in HTTP requests, Socket.IO payloads, logs, event logs, or UI diagnostics.
-- Unit tests cover key generation length, URL-safe encoding and decoding, hash extraction, hash cleanup, and malformed key handling.
-- `security_e2ee_spec.md` and `security_audit_open_source.md` stay synchronized with the implementation.
+- Authorization tokens are received, stored only as required, attached to authorized Socket.IO actions, and cleared on leave.
+- Share-link construction carries only the documented join authorization and fragment key.
+- Invalid or expired authorization fails safely without logging tokens.
+- Unit tests and security/signaling documentation are updated.
 
 ## Notes
 
-- Dependencies: ticket 15.
-- Excluded scope: HKDF derivation, metadata encryption, chunk encryption, and QR generation.
+- Dependencies: ticket 15 and the frozen backend authorization contract.
 
 ---
 
-## 17. Security: Implement HKDF and AES-GCM metadata encryption
+## 17. Security: Implement URL fragment key lifecycle
 
-When file metadata is exchanged, I want it encrypted with a metadata-specific AES-GCM key, so filenames, file sizes, MIME types, and optional checksums never reach the backend or peers without the fragment key.
+When peers share a room link, I want the master key generated, encoded, extracted, and removed safely.
 
 ## Acceptance Criteria
 
-- The frontend imports the master key and derives a `shipri-metadata-v1` AES-GCM key with HKDF, SHA-256, and the documented room salt.
-- Metadata encryption uses a random 12-byte IV generated with Web Crypto.
-- Metadata decryption rejects invalid tags, malformed payloads, missing fields, and wrong keys.
-- The wire payload uses `META_ENCRYPTED` and never sends plaintext `META`.
-- Unit tests cover encryption/decryption round trips, invalid tags, wrong keys, IV length, payload validation, and absence of plaintext metadata in serialized messages.
-- `security_e2ee_spec.md` and `p2p_data_protocol_spec.md` stay synchronized with the metadata wire format.
+- The creating peer generates a 256-bit key and places its URL-safe encoding only in the fragment.
+- The joining peer extracts and immediately removes the fragment.
+- Missing or malformed keys fail safely and key material never enters requests or logs.
+- Unit tests and security documentation are updated.
 
 ## Notes
 
 - Dependencies: ticket 16.
-- Excluded scope: Binary chunk encryption, file slicing, receiver acceptance UI, and persistence.
 
 ---
 
-## 18. Security: Implement epoch-safe chunk crypto primitives
+## 18. Security: Implement encrypted file-board metadata
 
-When encrypted file chunks are sent or resumed, I want deterministic IVs and transfer-epoch keys, so AES-GCM never reuses a key and IV pair.
+When either peer advertises a local file, I want its metadata encrypted before it reaches the remote board.
 
 ## Acceptance Criteria
 
-- The frontend derives chunk encryption keys with the documented `shipri-file-chunks-v1` domain and transfer epoch separation.
-- The chunk IV generator returns the documented 12-byte big-endian counter IV for each chunk index.
-- Chunk encryption and decryption authenticate every chunk and fail closed on tag mismatch.
-- Resume or retry epochs derive a new chunk key before reusing any chunk index.
-- Unit tests cover IV boundaries, chunk round trips, tampered chunks, wrong epochs, domain separation from metadata keys, and resumed index behavior.
-- `security_e2ee_spec.md` and `p2p_data_protocol_spec.md` document the final epoch and IV behavior.
+- Domain-separated HKDF and AES-GCM encrypt and decrypt file advertisements.
+- Advertisement payload validation rejects malformed, tampered, and wrong-key data.
+- Plaintext filename, size, and type never enter Socket.IO or logs.
+- Unit tests cover round trips, tampering, validation, and metadata leakage.
 
 ## Notes
 
-- Dependencies: ticket 17 and the resolved transfer-control/resume contract from ticket 14.
-- Excluded scope: Data-channel integration, file slicing, persistence, and UI progress.
+- Dependencies: ticket 17.
 
 ---
 
-## 19. Feature: Build the secure production WebRTC control plane
+## 19. Security: Implement authenticated transfer control messages
 
-When two production clients connect, I want dedicated control and binary channels plus encrypted metadata exchange, so the receiver can accept or decline without exposing plaintext metadata to the backend.
+When peers request and control downloads, I want every control message validated and authenticated.
 
 ## Acceptance Criteria
 
-- The frontend creates reliable `shipri-control` and `shipri-binary` data channels according to the P2P protocol.
-- The sender sends encrypted metadata over the control channel after WebRTC opens.
-- The receiver decrypts metadata locally and can accept, decline, or cancel through documented control messages.
-- Relay warnings, connection status, and cancellation events propagate through production state transitions.
-- Plaintext metadata, file chunks, and keys do not enter Socket.IO payloads or logs.
-- Unit tests cover control-channel open, encrypted metadata handling, accept, decline, cancel, relay warning, and error states with mocked data channels.
-- `frontend_development_plan.md`, `p2p_data_protocol_spec.md`, and `ui_ux_flow_spec.md` stay synchronized.
+- A documented codec handles file advertise/remove, download request/accept/reject, flow control, pause/resume, cancel, completion, error, and resume messages.
+- Messages bind to room, file, transfer, direction, and epoch where applicable.
+- Unknown, stale, forged, cross-transfer, and malformed messages fail closed.
+- Unit tests and protocol/security documentation are updated.
 
 ## Notes
 
-- Dependencies: tickets 15 through 18.
-- Excluded scope: Sending binary file chunks, disk persistence, final polished screens, and resume.
+- Dependencies: tickets 14 and 18.
 
 ---
 
-## 20. Feature: Implement bounded sender-side encrypted chunk streaming
+## 20. Security: Implement epoch-safe encrypted binary framing
 
-When a sender starts a transfer, I want the frontend to read, encrypt, and send file chunks sequentially with WebRTC backpressure, so large files do not exhaust browser memory.
+When either peer owns a requested file, I want chunks framed and encrypted without cross-transfer ambiguity or IV reuse.
 
 ## Acceptance Criteria
 
-- The sender slices the selected file sequentially with the documented 64 KB chunk size unless the frozen contract changes it.
-- The sender encrypts each chunk before sending it on `shipri-binary`.
-- The sender respects `RTCDataChannel.bufferedAmount`, `bufferedAmountLowThreshold`, `BUFFER_THRESHOLD`, and `BUFFER_MAX` backpressure rules.
-- Pause, resume, cancel, final partial chunk, and sender-side transfer-complete paths are implemented.
-- Unit tests cover slice boundaries, final partial chunk, backpressure pause/resume, cancel, transfer-complete signaling, and encryption failure.
-- `p2p_data_protocol_spec.md` stays synchronized with the implemented sender mechanics.
+- Binary frames identify transfer, file, epoch, and chunk index.
+- Per-transfer epoch keys and deterministic IVs never reuse a key/IV pair.
+- Invalid headers, tags, directions, epochs, or chunk order fail closed.
+- Unit tests cover framing, round trips, tampering, boundaries, and epoch separation.
 
 ## Notes
 
-- Dependencies: tickets 18 and 19.
-- Excluded scope: Receiver disk writes, browser persistence fallbacks, reconnection, and final UX polish.
+- Dependencies: ticket 19.
 
 ---
 
-## 21. Feature: Implement File System Access receiver persistence
+## 21. Feature: Build the production equal-peer WebRTC connection
 
-When a Chromium-family receiver accepts a transfer, I want decrypted chunks written directly through the File System Access API, so the MVP path can handle large files without accumulating them in memory.
+When two authorized peers enter a room, I want production control and binary channels available to both directions.
 
 ## Acceptance Criteria
 
-- Capability detection gates the File System Access path before transfer acceptance.
-- The receiver calls `showSaveFilePicker` before acknowledging readiness.
-- The receiver decrypts chunks in order and writes them directly to `FileSystemWritableFileStream`.
-- Decryption failure aborts the transfer, closes or cleans up the writable stream safely, and sends `TRANSFER_ERROR` with `DECRYPTION_FAILED`.
-- Successful completion closes the writable stream and verifies the expected chunk count.
-- Unit tests cover capability detection, save cancellation, ordered writes, final close, decryption failure, and cleanup behavior with mocked browser APIs.
-- `p2p_data_protocol_spec.md`, `frontend_development_plan.md`, and `ui_ux_flow_spec.md` document the MVP persistence path.
+- Production signaling, authorization, ICE, negotiation, and channel lifecycle follow frozen contracts.
+- Either peer can initiate authenticated control messages.
+- Connection and relay states propagate without diagnostic payload exposure.
+- Unit tests and frontend documentation are updated.
 
 ## Notes
 
-- Dependencies: tickets 18 through 20.
-- Excluded scope: Service Worker streaming, IndexedDB fallback, full cross-browser persistence, and resume.
+- Dependencies: tickets 15 through 20.
 
 ---
 
-## 22. Feature: Implement production transfer progress and controls
+## 22. Feature: Publish and remove local file advertisements
 
-When a transfer is active, I want progress, speed, ETA, pause, resume, cancel, completion, and authentication failure states, so users understand and control the transfer safely.
+When I add files to my room board, I want the remote peer to see encrypted advertisements without starting a transfer.
 
 ## Acceptance Criteria
 
-- The UI displays percentage, bytes sent or received, current speed, moving-average ETA, connection status, and relay warning when applicable.
-- Pause, resume, and cancel controls send the documented control messages and update both peers consistently.
-- Completion, cancellation, peer disconnect, authentication failure, and transfer error states are visible and recoverable according to the production state machine.
-- Progress never resets incorrectly during pause or transient connection-state changes.
-- Unit tests cover progress calculations, moving-average ETA, control-state transitions, cancel behavior, completion, and authentication failure rendering.
-- `ui_ux_flow_spec.md` and `p2p_data_protocol_spec.md` stay synchronized with the implemented controls.
+- Either peer can add multiple local files and publish encrypted advertisements.
+- Local file references remain only in the owner's browser.
+- Removing an advertisement updates the remote board and does not implicitly cancel active transfers.
+- Unit tests cover add, duplicate, remove, unavailable file, and cleanup.
 
 ## Notes
 
-- Dependencies: tickets 19 through 21.
-- Excluded scope: Reconnection/resume after transport interruption and alternate persistence paths.
+- Dependencies: tickets 18, 19, and 21.
 
 ---
 
-## 23. Feature: Build production file selection and share-link UX
+## 23. Feature: Synchronize the remote file board
 
-When a sender opens Shipri, I want to select or drop one file and receive a secure share link, so I can start the production transfer flow without diagnostic controls.
+When peers connect or reconnect, I want each board to converge on currently available remote files.
 
 ## Acceptance Criteria
 
-- The sender screen supports click-to-select and drag-and-drop for the MVP one-file transfer.
-- File name, type, and human-readable size are displayed only in the sender UI before encrypted metadata exchange.
-- Room creation, master-key generation, and share-link creation run in the documented order.
-- Copy-link feedback is implemented without exposing keys outside the intended URL fragment.
-- The UI uses vanilla React/Vite and project-local CSS with no unapproved UI or animation dependencies.
-- Unit tests cover file selection, drag-over state, room creation ordering, share-link construction, copy feedback, and room creation failure.
-- `ui_ux_flow_spec.md` and `security_e2ee_spec.md` stay synchronized with the production sender flow.
+- Remote advertisements decrypt into validated read-only board entries.
+- Snapshot/replay behavior converges without duplicate or stale entries.
+- A disconnected owner's entries become unavailable and follow the reconnect expiry rule.
+- Unit tests cover initial sync, updates, disconnect, reconnect, stale data, and decryption failure.
 
 ## Notes
 
-- Dependencies: tickets 16, 19, and the frozen production room contract.
-- Excluded scope: QR generation, receiver acceptance screen, active transfer screen, multiple-file support, and prototype diagnostics.
+- Dependencies: ticket 22.
 
 ---
 
-## 24. Feature: Build receiver acceptance and transfer screens
+## 24. Feature: Request a remote file after persistence is ready
 
-When a receiver opens a valid share link, I want to review encrypted metadata after local decryption and accept or decline the transfer, so the file is saved only after explicit consent.
+When I click a remote file, I want the save path prepared before requesting bytes from its owner.
 
 ## Acceptance Criteria
 
-- The receiver route extracts room ID and fragment key, joins the room, and removes the key from the visible URL.
-- The receiver displays decrypted file name, type, size, and sender connection status only after metadata decrypts successfully.
-- Accept starts the supported persistence path and sends `META_ACK` only when the receiver is ready.
-- Decline and cancel notify the sender and return both clients to documented states.
-- Active transfer and completion screens match the production state machine and exclude diagnostic controls.
-- Unit tests cover valid link flow, missing key, invalid room, metadata decryption failure, accept, decline, cancel, and completion rendering.
-- `ui_ux_flow_spec.md`, `security_e2ee_spec.md`, and `frontend_development_plan.md` stay synchronized.
+- Capability and size limits are checked before the request.
+- Cancelling the save dialog sends no download request.
+- A random transfer ID is created only after persistence is ready.
+- Owners accept available files and reject missing, removed, busy, or invalid requests.
+- Unit tests cover request, acceptance, rejection, cancellation, and duplicate requests.
 
 ## Notes
 
-- Dependencies: tickets 17, 21, 22, and 23.
-- Excluded scope: QR generation, alternate persistence paths, reconnection/resume, and final Playwright coverage.
+- Dependencies: tickets 19, 21, and 23.
 
 ---
 
-## 25. Feature: Add approved QR sharing to the sender flow
+## 25. Feature: Implement bounded owner-side encrypted chunk streaming
 
-When a sender waits for a receiver, I want an approved QR code for the full room URL, so a receiver can join from another device without manual link entry.
+When a peer accepts a download request, I want the local file streamed with bounded memory.
 
 ## Acceptance Criteria
 
-- QR generation uses an approved dependency or an approved local implementation.
-- The QR code encodes the full share URL including the fragment key.
-- The QR module is high contrast and remains readable in responsive sender layouts.
-- The QR code is never sent to the backend or logged.
-- Unit tests cover QR input generation, missing URL state, and copy-link coexistence.
-- `ui_ux_flow_spec.md` documents the selected QR approach and any dependency approval.
+- The owner slices, encrypts, frames, and sends sequential chunks for the requested transfer.
+- `bufferedAmount` high/low watermarks stop and resume reads.
+- Missing or changed local files fail only the affected transfer.
+- Unit tests cover boundaries, backpressure, cancellation, completion, and read/encryption failure.
 
 ## Notes
 
-- Dependencies: ticket 23.
-- Excluded scope: Adding an unapproved QR dependency, receiver flow changes, and visual release polish beyond the QR module.
+- Dependencies: tickets 20 and 24.
 
 ---
 
-## 26. Feature: Implement bounded reconnection and WebRTC renegotiation
+## 26. Feature: Implement bounded downloader flow control and direct persistence
 
-When the network drops during a transfer, I want bounded reconnect attempts and renegotiation, so recoverable interruptions do not always fail the transfer.
+When I download a remote file, I want encrypted chunks written to disk without an unbounded receive queue.
 
 ## Acceptance Criteria
 
-- The frontend attempts reconnection up to the documented limit and exposes the current attempt count in UI state.
-- WebRTC renegotiation uses the frozen signaling contract after Socket.IO reconnects.
-- The transfer pauses while reconnecting and resumes only after channels reopen and resume state is authenticated.
-- Failure after the retry limit transitions to the documented failed state and notifies both peers when possible.
-- Unit tests cover reconnect start, attempt limits, successful renegotiation, retry exhaustion, peer cancellation, and UI overlay state.
-- `ui_ux_flow_spec.md`, `p2p_data_protocol_spec.md`, and `testing_strategy.md` document reconnection behavior.
+- A byte-bounded decrypt/write queue applies `FLOW_PAUSE` and `FLOW_RESUME`.
+- Valid chunks are written in order through File System Access API for the MVP path.
+- Invalid, duplicate, cross-transfer, or out-of-order frames fail safely.
+- Completion closes the target only after all chunks are persisted.
+- Unit tests cover queue watermarks, writes, cancellation, completion, and failures.
 
 ## Notes
 
-- Dependencies: tickets 19 through 22 and the frozen resume contract.
-- Excluded scope: Resume key epoch implementation and browser E2E interruption tests.
+- Dependencies: tickets 20, 24, and 25.
 
 ---
 
-## 27. Security: Implement safe resume with transfer epoch rotation
+## 27. Feature: Implement independent transfer progress and controls
 
-When a transfer resumes, I want the sender and receiver to authenticate resume state and rotate chunk keys by epoch, so resumed chunks do not corrupt output or reuse AES-GCM key/IV pairs.
+When files move in either direction, I want each transfer controlled and displayed independently.
 
 ## Acceptance Criteria
 
-- The receiver tracks the last fully written chunk and sends an authenticated `RESUME_REQUEST`.
-- The sender resumes from the next required chunk only after validating resume state.
-- Each resumed transfer epoch derives a fresh chunk key before reusing any chunk index.
-- Output integrity is preserved across interruption and resume.
-- Unit tests cover last-written tracking, authenticated resume validation, stale or forged resume rejection, epoch rotation, duplicate chunk handling, and output integrity.
-- `security_e2ee_spec.md` and `p2p_data_protocol_spec.md` document the final resume and epoch behavior.
+- Progress, speed, ETA, direction, pause/resume, cancel, completion, and failure are tracked per transfer ID.
+- Simultaneous opposite-direction transfers do not share state or controls.
+- Cancelling or failing one transfer does not affect another or remove its advertisement.
+- Unit tests and UX documentation are updated.
 
 ## Notes
 
-- Dependencies: tickets 18, 21, 22, and 26.
-- Excluded scope: Service Worker streaming, IndexedDB fallback, and Playwright interruption tests.
+- Dependencies: tickets 25 and 26.
 
 ---
 
-## 28. Feature: Add browser capability detection and persistence limits
+## 28. Feature: Build the accessible shared room-board UX
 
-When a user starts or accepts a transfer, I want the frontend to detect supported browser capabilities and file-size limits, so it never promises unsupported unlimited transfers.
+When I enter a production room, I want to share local files and download remote files from one responsive board.
 
 ## Acceptance Criteria
 
-- The frontend detects File System Access API, Service Worker streaming prerequisites, IndexedDB fallback support, secure context availability, and relevant storage limitations.
-- The receiver sees accurate unsupported-browser or size-limit messaging before accepting a transfer.
-- The sender sees accurate limitation messaging when the current browser cannot support the selected transfer path.
-- Capability results are documented in the browser support matrix.
-- Unit tests cover supported Chromium, missing secure context, missing File System Access, Service Worker candidate, IndexedDB fallback candidate, and unsupported paths.
-- `frontend_development_plan.md`, `p2p_data_protocol_spec.md`, and `ui_ux_flow_spec.md` stay synchronized.
+- Create/join, share link, QR, waiting, local files, remote files, availability, and transfer rows are implemented.
+- Either peer can add files and click remote files without sender/receiver screens.
+- Keyboard, focus, status announcements, responsive layouts, and error copy are included.
+- Unit tests and UX/security documentation are updated.
 
 ## Notes
 
-- Dependencies: tickets 21 through 24.
-- Excluded scope: Implementing Service Worker streaming, IndexedDB fallback storage, and Playwright cross-browser tests.
+- Dependencies: tickets 16 through 27. QR dependency requires approval.
 
 ---
 
-## 29. Feature: Implement Service Worker streaming persistence
+## 29. Feature: Implement board reconnection and safe transfer resume
 
-When a supported non-File-System-Access browser receives a file, I want the frontend to stream decrypted chunks through a Service Worker download path, so compatible browsers can save files without accumulating them in memory.
+When connectivity returns, I want board state restored and eligible transfers resumed safely.
 
 ## Acceptance Criteria
 
-- The Service Worker path is enabled only for verified supported browsers and secure contexts.
-- The main thread creates a streaming download session before sending `META_ACK`.
-- Decrypted chunks are forwarded to the Service Worker stream in order.
-- Completion closes the stream and cancellation or errors abort the download path cleanly.
-- Unit tests cover registration, stream session creation, chunk forwarding, completion, cancellation, and unsupported-browser fallback.
-- Browser-specific limitations are documented in `p2p_data_protocol_spec.md`, `frontend_development_plan.md`, and `testing_strategy.md`.
+- Reconnection attempts are bounded and WebRTC renegotiation follows the frozen contract.
+- Board state converges after reconnect.
+- Resume authenticates transfer state, uses the last persisted chunk, and rotates epoch keys.
+- Unit tests cover reconnect success/exhaustion, stale resume, duplicate chunks, and output integrity.
 
 ## Notes
 
-- Dependencies: ticket 28.
-- Excluded scope: IndexedDB fallback, release Playwright coverage, and claiming arbitrary file-size support for unverified browsers.
+- Dependencies: tickets 23, 26, 27, and 28.
 
 ---
 
-## 30. Feature: Implement size-limited IndexedDB persistence fallback
+## 30. Feature: Add browser capability detection and persistence limits
 
-When no streaming persistence path is available, I want a clearly size-limited IndexedDB fallback, so smaller transfers can complete without pretending to support arbitrary file sizes.
+When I click a remote file, I want an accurate supported persistence path and size limit before requesting it.
 
 ## Acceptance Criteria
 
-- The fallback is available only when capability detection and quota checks indicate the selected file size is safe.
-- Chunks are stored in IndexedDB without constructing the full output Blob until completion.
-- Completion creates the final downloadable Blob and releases temporary records.
-- Cancellation, failure, and tab cleanup remove temporary IndexedDB records.
-- The UI clearly communicates fallback size limits before receiver acceptance.
-- Unit tests cover quota rejection, ordered chunk storage, completion, cleanup, cancellation, and error handling with mocked IndexedDB.
-- `p2p_data_protocol_spec.md` and `ui_ux_flow_spec.md` document fallback limitations.
+- Capability detection selects the verified File System Access MVP path or an unsupported state.
+- Unsupported browsers receive accurate guidance before any download request is sent.
+- Service Worker streaming and IndexedDB remain documented future extensions until separately approved.
+- Unit tests and browser-support documentation are updated.
 
 ## Notes
 
-- Dependencies: ticket 28.
-- Excluded scope: Service Worker streaming, unlimited file-size claims, and resume across browser restarts.
+- Dependencies: tickets 24, 26, and 28.
 
 ---
 
-## 31. Chore: Add approved Playwright release E2E setup
+## 31. Chore: Add approved Playwright peer-room E2E setup
 
-When the production transfer flow is ready for browser validation, I want an approved Playwright setup, so secure transfer scenarios can run across browser contexts.
+When the production board is testable, I want separate browser contexts and deterministic files for peer-room E2E tests.
 
 ## Acceptance Criteria
 
-- The approved Playwright dependency and frontend E2E script are configured.
-- E2E configuration can launch separate sender and receiver browser contexts.
-- Tests can create deterministic virtual files without committing fixtures with private data.
-- Local test instructions and any required browser flags are documented.
-- The setup does not require production secrets or external SaaS.
-- `testing_strategy.md` documents the active Playwright setup.
+- The approved Playwright setup launches two isolated peer contexts.
+- Tests can provide deterministic files and persistence stubs without private fixtures or production secrets.
+- Local instructions and browser limitations are documented.
 
 ## Notes
 
-- Dependencies: tickets 23 and 24 are implemented enough to drive the production flow.
-- Excluded scope: Writing every release scenario, adding Playwright without explicit dependency approval, and CI setup unless approved separately.
+- Dependencies: ticket 28. Adding Playwright requires approval.
 
 ---
 
-## 32. Chore: Cover secure transfer release scenarios
+## 32. Chore: Cover secure bidirectional room release scenarios
 
-When the final frontend nears release, I want browser E2E coverage for secure direct and relay transfers, so production behavior is verified through real browser APIs.
+When the frontend nears release, I want browser coverage for the shared board and independent transfers.
 
 ## Acceptance Criteria
 
-- E2E tests cover sender-to-receiver secure transfer with byte-for-byte output verification.
-- E2E tests cover room errors, decline, cancel, authentication failure, and completion states.
-- E2E tests cover forced TURN with `iceTransportPolicy: "relay"` after production TURN is available.
-- E2E tests cover network interruption and safe resume after resume support is implemented.
-- Tests verify keys and plaintext metadata are absent from captured network requests and visible diagnostics.
-- Frontend unit tests, E2E tests, and `npm run build` pass.
-- `testing_strategy.md` documents the release scenario coverage.
+- E2E scenarios cover both peers advertising files, downloading on click, byte-for-byte output, removal, cancellation, and simultaneous opposite-direction transfers.
+- Separate scenarios cover errors, reconnect/resume, forced TURN, and absence of keys/plaintext metadata in backend-visible traffic.
+- Frontend tests, E2E tests, build, and testing documentation pass.
 
 ## Notes
 
-- Dependencies: tickets 21 through 31 and production TURN availability.
-- Excluded scope: Load testing, third-party analytics, and unapproved external test services.
+- Dependencies: tickets 29 through 31 and production TURN availability.
 
 ---
 
 ## 33. Chore: Complete final frontend release gate
 
-When all final frontend features are implemented, I want a release gate that verifies documentation, security, accessibility, responsiveness, performance, and browser limitations, so Shipri ships with behavior matching its specifications.
+When all frontend features are implemented, I want a release gate proving that the peer-room product matches its specifications.
 
 ## Acceptance Criteria
 
-- Supported browsers complete documented direct-P2P and forced-TURN transfer scenarios.
-- Responsive layouts, keyboard navigation, focus management, status messaging, and error copy are reviewed and corrected.
-- Representative memory usage stays bounded for the supported transfer paths.
-- Transfer performance is measured with representative files and documented.
-- Security checks confirm no E2EE keys, plaintext metadata, or file contents appear in backend payloads, logs, or diagnostic UI.
-- `npm run build`, frontend unit tests, and approved Playwright scenarios pass.
-- `frontend_development_plan.md`, `ui_ux_flow_spec.md`, `p2p_data_protocol_spec.md`, `security_e2ee_spec.md`, `security_audit_open_source.md`, and `testing_strategy.md` match the released behavior and limitations.
+- Supported browsers pass direct and forced-TURN shared-board and bidirectional transfer scenarios.
+- Accessibility, responsiveness, memory bounds, transfer performance, browser limits, and security checks pass.
+- The backend is verified to receive no board state, file requests, plaintext metadata, file contents, or E2EE keys.
+- Tests, build, release evidence, and all relevant documentation are synchronized.
 
 ## Notes
 
 - Dependencies: tickets 14 through 32.
-- Excluded scope: New product features beyond the documented one-file MVP.

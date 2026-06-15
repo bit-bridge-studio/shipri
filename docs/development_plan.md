@@ -37,7 +37,7 @@ These decisions must be defined at the level required by the backend POC before 
    * Define the later full-backend scenarios that the frontend prototype must expose: authorization, direct ICE, and forced TURN.
 
 4. **Production transfer protocol**
-   * Before final frontend development, define receiver backpressure, transfer-control messages, and resume-safe encryption epochs.
+   * Before final frontend development, define encrypted file-board synchronization, download requests, per-transfer identities, downloader backpressure, transfer-control messages, and resume-safe encryption epochs.
 
 5. **Testing dependencies**
    * Approve Vitest for backend and frontend unit/integration tests.
@@ -89,7 +89,7 @@ The backend implements room authorization, lifecycle, validation, abuse controls
 
 **Purpose:** build the actual Shipri product on top of the accepted backend contract.
 
-The final frontend implements E2EE, bounded-memory file transfer, direct-to-disk persistence, complete UX, reconnection, browser compatibility paths, and browser E2E tests.
+The final frontend implements an encrypted shared file board where either peer can publish local files and download remote files on demand. It also implements E2EE, bounded-memory bidirectional transfers, direct-to-disk persistence, complete UX, reconnection, browser compatibility paths, and browser E2E tests.
 
 **Gate:** supported browsers complete secure direct-P2P and forced-TURN transfer scenarios.
 

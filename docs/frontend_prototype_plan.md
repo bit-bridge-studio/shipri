@@ -21,7 +21,7 @@ Mocks may be used in frontend unit tests, but they must not replace the accepted
 
 The prototype must make backend and network behavior easy to exercise and inspect:
 
-* Create and join rooms as separate browser clients.
+* Create and join rooms as separate, equal browser peers.
 * Display Socket.IO connection state, emitted events, received events, payloads, and stable error codes.
 * Negotiate a native WebRTC connection through the backend.
 * Open a diagnostic data channel and exchange ping/pong or short text messages.
@@ -67,7 +67,7 @@ The following work belongs to final frontend development:
 
 * Add the approved frontend Vitest setup and `test` script.
 * Add a package lockfile and verify clean `npm ci` and build workflows.
-* Create a simple diagnostic layout with role, connection state, action controls, and event log.
+* Create a simple diagnostic layout with membership state, negotiation duty, connection state, action controls, and event log.
 * Isolate Socket.IO client code from React rendering.
 * Add tests for state transitions and event-log behavior.
 
@@ -82,7 +82,7 @@ The following work belongs to final frontend development:
 
 * Add controls for room creation, joining, and leaving.
 * Handle the accepted POC room membership contract.
-* Display room ID, role, peer state, and all stable room errors.
+* Display room ID, membership state, offerer/answerer duty, peer state, and all stable room errors.
 * Add an optional malformed-input panel for manual validation testing.
 
 **Exit criteria:**
@@ -95,8 +95,8 @@ The following work belongs to final frontend development:
 
 * Request ICE credentials from the backend.
 * Negotiate native `RTCPeerConnection` through `signal:forward` and `signal:receive`.
-* Create one diagnostic reliable data channel.
-* Exchange ping/pong and short text payloads.
+* Create one diagnostic reliable data channel using the deterministic offerer peer.
+* Prove that either peer can initiate ping/pong and short text payloads.
 * Display SDP, ICE, peer connection, and data-channel states without exposing backend secrets.
 
 **Exit criteria:**

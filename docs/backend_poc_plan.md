@@ -2,7 +2,7 @@
 
 This plan covers Part 1: the minimum backend proof of concept required before building the frontend prototype.
 
-The POC proves that two clients can discover each other through a room and relay WebRTC signaling data. It is intentionally small and is not production-ready.
+The POC proves that two equal peers can discover each other through a room and relay WebRTC signaling data. Creator/joiner roles exist only for room entry and deterministic offer/answer negotiation. They do not define future file-transfer direction.
 
 ---
 
@@ -12,11 +12,11 @@ The backend POC must provide a stable starting contract for the frontend prototy
 
 * Start an HTTP and Socket.IO server locally.
 * Expose a basic health endpoint.
-* Create a room and return its room ID to the host.
-* Join one receiver to an existing room.
+* Create a room and return its room ID to the creating peer.
+* Join one second peer to an existing room.
 * Reject a third peer and unknown rooms with stable error codes.
 * Relay SDP and ICE candidate payloads only between the room's two members.
-* Notify peers about disconnects and remove closed rooms.
+* Notify the remaining peer about disconnects and remove empty rooms.
 * Provide a development ICE response with STUN configuration.
 * Deploy the POC to a dedicated staging endpoint with HTTPS/WSS for remote testing.
 
@@ -45,11 +45,12 @@ The initial frontend prototype may rely on these Socket.IO events:
 
 | Direction | Event | Purpose |
 | :--- | :--- | :--- |
-| Client to server | `room:create` | Create a room for the host. |
-| Server to client | `room:created` | Return the created `roomId`. |
-| Client to server | `room:join` | Join one receiver to a room. |
-| Server to client | `room:joined` | Confirm the receiver role. |
-| Server to client | `peer:joined` | Notify the host that the receiver joined. |
+| Client to server | `room:create` | Create a room for the first peer. |
+| Server to client | `room:created` | Return the created `roomId` and `offerer` negotiation duty. |
+| Client to server | `room:join` | Join the second peer to a room. |
+| Server to client | `room:joined` | Confirm room membership and `answerer` negotiation duty. |
+| Server to client | `peer:joined` | Notify the existing peer that the second peer joined. |
+| Server to client | `peer:left` | Notify the remaining peer about leave or disconnect. |
 | Client to server | `signal:forward` | Relay SDP or ICE data to the other room member. |
 | Server to client | `signal:receive` | Deliver relayed SDP or ICE data. |
 | Client to server | `ice:get` | Request development ICE configuration. |
@@ -57,7 +58,7 @@ The initial frontend prototype may rely on these Socket.IO events:
 | Client to server | `room:leave` | Leave the active room explicitly. |
 | Server to client | `room:error` | Return a stable room or validation error. |
 
-All payloads use `roomId` in camelCase. POC signal forwarding must still verify that the sender is one of the room's two members.
+All payloads use `roomId` in camelCase. POC signal forwarding must verify that the emitting peer is one of the room's two members. POC creator/joiner identities are negotiation duties only.
 
 ---
 
@@ -95,7 +96,7 @@ All payloads use `roomId` in camelCase. POC signal forwarding must still verify 
 **Work:**
 
 * Create rooms with the canonical `ship-[a-f0-9]{4}` development ID.
-* Join exactly one receiver.
+* Join exactly one second peer.
 * Return stable `ROOM_NOT_FOUND`, `ROOM_FULL`, and validation errors.
 * Implement explicit leave and disconnect cleanup.
 * Notify the remaining peer when the other peer leaves.
@@ -108,13 +109,13 @@ All payloads use `roomId` in camelCase. POC signal forwarding must still verify 
 
 **Work:**
 
-* Relay SDP and ICE candidate payloads between the host and receiver.
+* Relay SDP and ICE candidate payloads bidirectionally between the two peers.
 * Reject signaling from sockets that are not active room members.
 * Avoid inspecting or mutating signaling payload contents.
 
 **Exit criteria:**
 
-* Integration tests prove bidirectional relay and unauthorized-sender rejection.
+* Integration tests prove bidirectional relay and unauthorized-peer rejection.
 
 ### BP-4: Implement Development ICE Configuration
 

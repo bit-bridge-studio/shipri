@@ -16,6 +16,9 @@ These conventions resolve conflicts between older specification drafts and must 
 6. **AES-GCM IV safety**: every AES-GCM encryption operation must use an IV that is unique for its key. Shipri derives separate keys for metadata and file chunks to keep IV domains separate.
 7. **TURN on port 443**: Caddy owns `shipri.app:443` for HTTPS/WSS. Coturn TURNS on `443` requires a separate hostname/IP such as `turn.shipri.app`, or an explicitly documented deployment topology that prevents port conflicts.
 8. **Documentation status**: `Completed` means the specification draft is complete, not that the corresponding code is fully implemented.
+9. **Peer room model**: after joining, both room members are equal peers. Creator/joiner and offerer/answerer describe signaling duties only and never determine who may publish or download a file.
+10. **Shared file board**: each peer may advertise local files to the other peer through the encrypted P2P control channel. Files remain on the owner's device and are transferred only after the remote peer explicitly requests a download and chooses a persistence target.
+11. **Backend privacy boundary**: the signaling backend never receives the shared file board, plaintext file metadata, file requests, file contents, or transfer progress.
 
 ---
 

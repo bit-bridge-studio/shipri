@@ -9,10 +9,10 @@ This document describes the Zero-Knowledge security architecture for Project Shi
 ### 1.1. Assumptions & Trust Boundaries
 * **Signaling Server**: Deemed **untrusted**. The system must remain secure even if the signaling server is compromised or controlled by an adversary.
 * **Network Path**: Deemed **untrusted**. Standard WebRTC uses DTLS-SRTP for transport encryption, but we add an additional layer of application-level E2EE for maximum security.
-* **Client Browsers (Host & Receiver)**: Deemed **trusted**. The code executing in both user browsers is assumed to be running in secure, non-compromised sandboxes.
+* **Client Browsers (Room Peers)**: Deemed **trusted**. The code executing in both user browsers is assumed to be running in secure, non-compromised sandboxes.
 
 ### 1.2. Security Targets
-1. **Confidentiality**: Only the Host and the Receiver can decrypt the file.
+1. **Confidentiality**: Only the two authorized room peers can decrypt file-board metadata, control messages, and file contents.
 2. **Integrity**: Any tampering with the ciphertext by a malicious intermediary or network error must be detected instantly, aborting the transfer.
 3. **Zero Metadata Leakage**: The signaling server must not see the file name, file type, or size.
 
@@ -24,23 +24,21 @@ The fundamental pillar of Shipri's Zero-Knowledge architecture is that the decry
 
 ```mermaid
 sequenceDiagram
-    participant Host as Host (Sender Browser)
+    participant PeerA as Creating Peer
     participant Server as Signaling Server
-    participant Recv as Receiver Browser
+    participant PeerB as Joining Peer
 
-    Note over Host: 1. Generate 256-bit master key in RAM<br/>2. Create Room via WebSocket
-    Host->>Server: room:create
-    Server-->>Host: room:created (roomId: ship-83a1)
-    Note over Host: 3. Format URL with Key in Hash:<br/>shipri.app/room/ship-83a1#key=ABC...
-    Note over Host: 4. Share link via secure channel (IM/QR)
-    Host->>Recv: Share link (including URL #Hash)
-    Note over Recv: 5. Extract Key from window.location.hash<br/>(Hash is never sent to Server)
-    Recv->>Server: room:join (roomId: ship-83a1)
-    Server-->>Host: peer:joined
+    Note over PeerA: Generate master key and create room
+    PeerA->>Server: room:create
+    Server-->>PeerA: room:created
+    PeerA->>PeerB: Share link including URL fragment
+    Note over PeerB: Extract and remove fragment
+    PeerB->>Server: room:join
+    Server-->>PeerA: peer:joined
 ```
 
 ### 2.1. Master Key Generation
-The Host generates a cryptographically secure, random 256-bit master secret using the Web Crypto API:
+The creating peer generates a cryptographically secure, random 256-bit master secret using the Web Crypto API:
 ```javascript
 const masterKeyBytes = crypto.getRandomValues(new Uint8Array(32));
 const keyStringBase64 = btoa(String.fromCharCode(...masterKeyBytes))
@@ -52,8 +50,9 @@ The URL fragment carries only this random master secret. Runtime encryption keys
 ### 2.2. Key Derivation
 Shipri derives separate AES-GCM keys for independent encryption domains:
 
-1. `shipri-metadata-v1`: encrypts metadata and control-plane file proposals.
-2. `shipri-file-chunks-v1`: encrypts binary file chunks.
+1. `shipri-board-metadata-v1`: encrypts file advertisements.
+2. `shipri-control-v1`: authenticates and encrypts download requests and transfer-control messages.
+3. `shipri-file-chunks-v1`: encrypts binary file chunks with transfer ID and epoch separation.
 
 The derivation uses Web Crypto HKDF with SHA-256, a per-room salt derived from `roomId`, and a domain-specific `info` value:
 
@@ -88,13 +87,13 @@ The key is appended to the room URL as a fragment identifier:
 `https://shipri.app/room/ship-83a1#key=url_safe_base64_key`
 
 * **Why this is secure**: According to RFC 3986, the fragment identifier (everything after `#`) is processed strictly client-side by the browser. It is **never** sent to the server in HTTP requests or WebSocket handshake headers.
-* **Required cleanup**: After extracting the key, the receiver must remove the fragment from the visible address bar with `window.history.replaceState(null, "", window.location.pathname)`.
+* **Required cleanup**: After extracting the key, the joining peer must remove the fragment from the visible address bar with `window.history.replaceState(null, "", window.location.pathname)`.
 
 ---
 
 ## 3. Metadata Encryption
 
-Since the signaling server must not know what file is being sent, the file metadata block is encrypted before it crosses any network channel.
+Since the signaling server must not know which files are available, every file advertisement is encrypted before it crosses the P2P control channel.
 
 1. **Structure of Plaintext Metadata**:
    ```json
@@ -106,21 +105,22 @@ Since the signaling server must not know what file is being sent, the file metad
    }
    ```
 2. **Encryption**:
-   * The metadata is JSON-stringified and encrypted using the `shipri-metadata-v1` AES-GCM key.
+   * The metadata is JSON-stringified and encrypted using the `shipri-board-metadata-v1` AES-GCM key.
    * We use a random 12-byte Initialization Vector (IV) generated with `crypto.getRandomValues`.
-3. **Payload Sent to Receiver** (preferred over the P2P control channel after WebRTC connects; allowed through signaling only if encrypted):
+3. **P2P File Advertisement Payload**:
    ```json
    {
-     "type": "META_ENCRYPTED",
+     "type": "FILE_ADVERTISE",
      "payload": {
+       "fileId": "opaque_random_file_id",
        "iv": "base64_encoded_12_bytes_iv",
        "ciphertext": "base64_encoded_encrypted_metadata"
      }
    }
    ```
-4. **Decryption**: The Receiver extracts the `iv` and `ciphertext`, derives the same metadata key from the URL fragment master key, decrypts it, and recovers the original file metadata to present it in the UI.
+4. **Decryption**: The remote peer derives the same board-metadata key, decrypts the advertisement locally, and presents it in the shared file board.
 
-The plaintext `META` structure in `p2p_data_protocol_spec.md` is the logical content before encryption. It must not be transmitted as plaintext.
+Plaintext metadata is local logical content only. It must never cross Socket.IO or a P2P channel without application-level encryption.
 
 ---
 
@@ -152,7 +152,7 @@ function getIvForChunk(chunkIndex) {
 }
 ```
 
-### 4.2. Encryption Flow (Sender)
+### 4.2. Encryption Flow (File Owner)
 ```javascript
 const iv = getIvForChunk(currentChunkIndex);
 const encryptedChunk = await window.crypto.subtle.encrypt(
@@ -167,7 +167,7 @@ const encryptedChunk = await window.crypto.subtle.encrypt(
 binaryChannel.send(encryptedChunk);
 ```
 
-### 4.3. Decryption Flow (Receiver)
+### 4.3. Decryption Flow (Downloader)
 ```javascript
 const iv = getIvForChunk(expectedChunkIndex);
 try {
@@ -180,7 +180,7 @@ try {
     incomingEncryptedChunk
   );
   
-  // Write decryptedChunk to disk
+  // Write decryptedChunk to the selected persistence target
   await writableStream.write(decryptedChunk);
   expectedChunkIndex++;
 } catch (error) {
@@ -195,7 +195,7 @@ try {
 ## 5. Summary of Web Crypto API Constraints & Workarounds
 
 1. **Main-Thread Performance**: Encrypting and decrypting blocks of 64KB via the Web Crypto API on the main thread is fast enough for connections up to ~200-300 Mbps. For Gigabit speeds, the main thread can stall, causing UI stuttering.
-   * **Mitigation**: Move the encryption (Sender) and decryption (Receiver) loops inside a browser **Web Worker**. Web Workers have full access to `crypto.subtle` and can perform encryption off the main thread, keeping the interface running at 60 FPS.
+   * **Mitigation**: Move owner-side encryption and downloader-side decryption loops inside a browser **Web Worker**.
 2. **Secure Contexts Required**: The `crypto.subtle` API is **only** available in Secure Contexts (HTTPS or `localhost`). Shipri cannot run in E2EE mode over plain HTTP.
 
 ---

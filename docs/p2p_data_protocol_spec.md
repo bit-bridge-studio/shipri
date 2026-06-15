@@ -1,241 +1,139 @@
-# P2P Data Protocol & Chunking Specification (Shipri)
+# P2P File Board & Transfer Protocol Specification (Shipri)
 
-This document outlines the technical specification for transferring files of arbitrary sizes (from 1MB to 100GB+) directly between two browsers using WebRTC Data Channels. It addresses memory management, flow control (backpressure), network limits, and disk write strategies to prevent browser tab crashes.
+Shipri rooms expose a shared, encrypted file board between two equal peers. Each peer may advertise local files. A file remains on its owner's device and is transferred only when the remote peer clicks it, chooses a persistence target, and sends a download request.
 
----
-
-## 1. The Core Challenge: Memory Exhaustion
-
-When handling files in the browser, developers often load the entire file into RAM (e.g., using `file.arrayBuffer()`). This works for small files (under 100MB), but will crash the browser tab or OS process when handling large files (e.g., a 10GB video file) due to the strict RAM limitations allocated to a single browser thread.
-
-### The Shipri Solution
-1. **Sender-side Streaming**: Read the file in small, sequential chunks from disk using the `Blob.slice()` API. Only one chunk (e.g., 64KB) exists in memory at any given millisecond.
-2. **Backpressure (Flow Control)**: Monitor the WebRTC queue buffer. If the network interface is slower than the disk read speed, pause reading to avoid piling up data in RAM.
-3. **Receiver-side Streaming**: Write incoming binary chunks directly to the disk as they arrive. Do not accumulate them in an in-memory array.
+The signaling backend never receives this protocol.
 
 ---
 
-## 2. WebRTC Data Channel Configuration
+## 1. Core Model
 
-We use two separate WebRTC data channels to decouple control signals from raw binary data. This prevents large file chunks from blocking high-priority control messages (like "Pause", "Cancel", or "Heartbeat").
+* **Peer**: either connected room member.
+* **File owner**: the peer that selected a local file and advertised it.
+* **Downloader**: the remote peer requesting and saving that file.
+* **File advertisement**: encrypted metadata representing an available local file.
+* **Transfer session**: one requested download identified independently from the file advertisement.
 
-### 2.1. Control Channel (`shipri-control`)
-* **Purpose**: Negotiate file transfer metadata, transport commands, and sync progress stats.
-* **Configuration**:
-  * `ordered`: `true` (guarantees delivery order)
-  * `maxRetransmits`: `null` (reliable transmission, TCP-like behavior via SCTP)
-* **Payload Type**: UTF-8 String (JSON-encoded).
-
-### 2.2. Binary Channel (`shipri-binary`)
-* **Purpose**: Streaming raw chunk bytes.
-* **Configuration**:
-  * `ordered`: `true`
-  * `maxRetransmits`: `null`
-* **Payload Type**: Binary (`ArrayBuffer` or `Blob`).
+A peer may be an owner for one transfer and a downloader for another at the same time. The MVP supports multiple advertised files and one active transfer per direction, allowing simultaneous bidirectional transfers.
 
 ---
 
-## 3. Wire Protocol & Message Formats
+## 2. Data Channels
 
-### 3.1. Handshake & Meta Exchange (`shipri-control`)
-Before any binary transmission starts, the Host (Sender) prepares the plaintext metadata descriptor below. This structure is the logical pre-encryption payload and must not be sent as plaintext in E2EE mode:
+### `shipri-control`
+
+Reliable ordered JSON messages for board synchronization and transfer control.
+
+### `shipri-binary`
+
+Reliable ordered binary frames. Every frame includes a validated header containing `transferId`, `fileId`, `epoch`, and `chunkIndex`, followed by encrypted chunk bytes.
+
+---
+
+## 3. Encrypted File Board
+
+The board is reconstructed peer-to-peer after the data channels open.
+
+### Advertise or update a local file
 
 ```json
 {
-  "type": "META",
+  "type": "FILE_ADVERTISE",
   "payload": {
-    "fileId": "uuid-v4-hash-string",
-    "fileName": "large_video.mp4",
-    "fileSize": 10737418240,
-    "fileType": "video/mp4",
-    "chunkSize": 65536,
-    "totalChunks": 163840,
-    "sha256": "optional_streaming_sha256_if_available"
+    "fileId": "opaque-file-id",
+    "encryptedMetadata": {
+      "iv": "base64url",
+      "ciphertext": "base64url"
+    }
   }
 }
 ```
 
-The wire message is `META_ENCRYPTED`, as defined in `security_e2ee_spec.md`. The Receiver decrypts it locally, presents the file proposal in the UI, and acknowledges before the sender begins streaming:
+The encrypted metadata contains filename, size, MIME type, chunk size, total chunks, and optional checksum. `fileId` is an opaque random identifier and does not expose metadata.
+
+### Remove a local file
+
 ```json
 {
-  "type": "META_ACK",
+  "type": "FILE_REMOVE",
   "payload": {
-    "fileId": "uuid-v4-hash-string",
-    "status": "ready"
+    "fileId": "opaque-file-id"
   }
 }
 ```
 
-### 3.2. Control Signals during Transfer
-* **Pause**: `{ "type": "PAUSE" }`
-* **Resume**: `{ "type": "RESUME" }`
-* **Cancel**: `{ "type": "CANCEL", "reason": "user_cancelled" }`
-* **Transfer Complete**: `{ "type": "TRANSFER_COMPLETE", "payload": { "fileId": "uuid-v4-hash-string", "totalChunks": 163840 } }`
-* **Transfer Error**: `{ "type": "TRANSFER_ERROR", "payload": { "code": "DECRYPTION_FAILED" } }`
+Advertisements owned by a disconnected peer are marked unavailable and removed after the documented reconnect window.
 
 ---
 
-## 4. Sender Mechanics & Flow Control (Backpressure)
+## 4. Download Request Lifecycle
 
-A major cause of crashes in WebRTC file sharing is sending data faster than the connection can transmit it. The browser stores outgoing data in a buffer. If this buffer exceeds ~16MB (on Chrome/Firefox), the connection will drop or crash.
+Clicking a remote file does not immediately start network transfer.
 
-### 4.1. The Backpressure Loop
-WebRTC provides the `RTCDataChannel.bufferedAmount` property and the `bufferedamountlow` event to manage queue sizes.
+1. The downloader checks browser capability and opens the supported save dialog or persistence path.
+2. After persistence is ready, the downloader creates a random `transferId` and sends:
 
-1. **Threshold Configuration**:
-   * `CHUNK_SIZE` = `64 * 1024` (64 KB). This is the safest packet size to avoid packet fragmentation and browser overhead.
-   * `BUFFER_THRESHOLD` = `1024 * 1024` (1 MB). The low-water mark.
-   * `BUFFER_MAX` = `4 * 1024 * 1024` (4 MB). The high-water mark.
-
-2. **Algorithm**:
-   ```javascript
-   let currentChunkIndex = 0;
-   let isPaused = false;
-   
-   function sendNextChunk() {
-     if (isPaused) return;
-
-     // Check if the WebRTC buffer is getting full
-     if (binaryChannel.bufferedAmount > BUFFER_MAX) {
-       // Wait until the buffer drains before reading the next chunk
-       binaryChannel.onbufferedamountlow = () => {
-         binaryChannel.onbufferedamountlow = null; // Clear handler
-         sendNextChunk();
-       };
-       return;
-     }
-
-     if (currentChunkIndex < totalChunks) {
-       const start = currentChunkIndex * CHUNK_SIZE;
-       const end = Math.min(start + CHUNK_SIZE, file.size);
-       const blobSlice = file.slice(start, end);
-
-       const reader = new FileReader();
-       reader.onload = (e) => {
-         const arrayBuffer = e.target.result;
-         binaryChannel.send(arrayBuffer);
-         currentChunkIndex++;
-         
-         // Tail-recursive call to process next chunk
-         // Will yield to macro-task queue to prevent locking UI
-         setTimeout(sendNextChunk, 0);
-       };
-       reader.readAsArrayBuffer(blobSlice);
-     } else {
-       // All chunks sent
-       controlChannel.send(JSON.stringify({ type: "TRANSFER_COMPLETE" }));
-     }
-   }
-   ```
-
----
-
-## 5. Receiver Mechanics & Saving to Disk
-
-Saving files directly to the user's hard drive without loading them fully into browser memory is the most complex part of the system due to browser sandboxing and varying API support.
-
-We employ a **hybrid strategy** based on browser capability:
-
-```mermaid
-graph TD
-    A[Receive Metadata] --> B{Supports File System Access API?}
-    B -- Yes --> C[Use ShowSaveFilePicker & FileSystemWritableFileStream]
-    B -- No --> D{Supports Service Worker Stream Interception?}
-    D -- Yes --> E[Register Service Worker & Stream Download]
-    D -- No --> F[Fallback: Chunked IndexedDB Storage]
+```json
+{
+  "type": "DOWNLOAD_REQUEST",
+  "payload": {
+    "transferId": "opaque-transfer-id",
+    "fileId": "opaque-file-id"
+  }
+}
 ```
 
-### 5.1. Primary Strategy: File System Access API (`showSaveFilePicker`)
-Supported by Chrome, Edge, and Opera. It allows direct, native-speed disk writes via a file picker.
+3. The owner verifies that the file is still available and replies with `DOWNLOAD_ACCEPTED` or `DOWNLOAD_REJECTED`.
+4. Only an accepted request starts encrypted chunk streaming.
+5. `TRANSFER_PAUSE`, `TRANSFER_RESUME`, `TRANSFER_CANCEL`, `TRANSFER_COMPLETE`, `TRANSFER_ERROR`, `FLOW_PAUSE`, `FLOW_RESUME`, and `RESUME_REQUEST` always include `transferId`.
 
-1. **Setup**:
-   ```javascript
-   // Triggers native system "Save As" dialog before transfer begins
-   const handle = await window.showSaveFilePicker({
-     suggestedName: fileName,
-   });
-   const writable = await handle.createWritable();
-   ```
-2. **Chunk Processing**:
-   ```javascript
-   binaryChannel.onmessage = async (event) => {
-     const chunk = event.data; // ArrayBuffer
-     await writable.write(chunk); // Writes chunk directly to physical disk
-     // Update UI progress tracker
-   };
-   ```
-3. **Completion**:
-   ```javascript
-   // Upon receiving TRANSFER_COMPLETE control message
-   await writable.close();
-   ```
-
-### 5.2. Secondary Strategy: Service Worker Stream Interception
-Used for browsers that lack `showSaveFilePicker` but support Service Workers, `ReadableStream`, and streaming responses reliably. This path converts the incoming WebRTC stream into an active browser download.
-
-1. **How it works**:
-   * The client registers a Service Worker.
-   * The client opens a hidden `<iframe>` pointing to a special URL served by the Service Worker, e.g., `/download-stream?fileId=xyz`.
-   * The Service Worker intercepts this request and returns a response containing a `ReadableStream` and headers:
-     `Content-Disposition: attachment; filename="large_video.mp4"`
-   * The browser treats this response as a native file download and prompts the user to select a location when supported by that browser.
-   * As WebRTC chunks arrive, the main thread forwards them to the Service Worker via `postMessage`.
-   * The Service Worker pushes these chunks into the active `ReadableStream` controller. The browser writes them directly to the download location using its native engine.
-
-2. **Service Worker Implementation snippet**:
-   ```javascript
-   let streamController;
-   
-   self.addEventListener('fetch', (event) => {
-     if (event.request.url.includes('/download-stream')) {
-       const stream = new ReadableStream({
-         start(controller) {
-           streamController = controller;
-         }
-       });
-       
-       event.respondWith(new Response(stream, {
-         headers: {
-           'Content-Type': 'application/octet-stream',
-           'Content-Disposition': 'attachment; filename="large_video.mp4"',
-         }
-       }));
-     }
-   });
-
-   self.addEventListener('message', (event) => {
-     if (event.data.type === 'CHUNK') {
-       streamController.enqueue(new Uint8Array(event.data.chunk));
-     } else if (event.data.type === 'CLOSE') {
-       streamController.close();
-     }
-   });
-   ```
-
-### 5.3. Fallback Strategy: IndexedDB Chunking (For environments missing Streams)
-If the browser has disabled Service Workers or does not support streaming downloads reliably, chunks are temporarily appended to an `IndexedDB` store. Once the transfer is complete, we construct a Blob from the IDB records and invoke `URL.createObjectURL(blob)`.
-* *Warning*: This fallback is not compatible with the "arbitrary file size" product pillar. It is a last-resort path for smaller files and must clearly warn the user about browser quota and memory limits before acceptance.
+The owner may remove an advertisement before a request starts. Removing it during an active transfer does not implicitly cancel that transfer.
 
 ---
 
-## 6. Integrity & Error Recovery
+## 5. Bounded-Memory Transfer
 
-### 6.1. Verification
-Integrity is enforced in two layers:
+### Owner-side backpressure
 
-1. **Required per-chunk authentication**: AES-GCM authenticates every encrypted chunk. If decryption fails, the receiver must abort the transfer and emit `TRANSFER_ERROR` with code `DECRYPTION_FAILED`.
-2. **Optional whole-file checksum**: A full-file SHA-256 checksum may be shown or compared when a vetted streaming hash implementation is available. The standard Web Crypto `digest()` API is not incremental, so it must not be used in a way that requires loading large files fully into memory. Adding a streaming hash library requires dependency approval.
+* Read the local file sequentially with `Blob.slice()`.
+* Encrypt only bounded chunks.
+* Stop reading when `RTCDataChannel.bufferedAmount` exceeds the high-water mark.
+* Resume only after `bufferedamountlow`.
 
-### 6.2. Network Interruption & Resumption
-Since WebRTC connections can drop temporarily (e.g., switching from Wi-Fi to 4G):
-1. **Re-connection**: The client tries to reconnect to the signaling server and re-negotiates WebRTC parameters.
-2. **Chunk Position Handshake**: Once the WebRTC channels are re-opened, the Receiver sends a control message:
-   ```json
-   {
-     "type": "RESUME_REQUEST",
-     "payload": {
-       "lastReceivedChunkIndex": 54201
-     }
-   }
-   ```
-3. **Resumed Stream**: The Sender updates its internal `currentChunkIndex` to `54202` and starts slicing/sending after the last fully written chunk. No data is lost, and the transfer continues seamlessly.
+### Downloader-side backpressure
+
+An async `onmessage` handler alone does not provide backpressure. The downloader must:
+
+* keep a bounded decrypt/write queue measured in bytes;
+* send `FLOW_PAUSE` before the queue exceeds its high-water mark;
+* send `FLOW_RESUME` after it drains below its low-water mark;
+* reject frames with unknown transfer IDs, invalid sequencing, or unsafe queue growth.
+
+### Persistence
+
+1. Primary: File System Access API direct writes.
+2. Secondary: verified Service Worker streaming.
+3. Fallback: explicitly size-limited IndexedDB buffering.
+
+The UI must disclose limits before the download request is sent.
+
+---
+
+## 6. Resume and Integrity
+
+* AES-GCM authenticates every chunk.
+* Binary frame identity prevents chunks from being applied to the wrong transfer.
+* The downloader acknowledges only fully persisted chunks.
+* `RESUME_REQUEST` includes `transferId`, last persisted chunk, and the next transfer epoch.
+* Reusing a chunk index requires a newly derived epoch key.
+* Stale, forged, duplicate, or cross-transfer messages fail closed.
+
+---
+
+## 7. Failure Rules
+
+* If an owner disconnects, its files become unavailable and active outgoing transfers pause for the reconnect window.
+* If a downloader cancels a save dialog, no `DOWNLOAD_REQUEST` is sent.
+* If a local file changes or becomes unreadable, the owner sends `TRANSFER_ERROR`.
+* Cancellation affects only the referenced transfer session.
+* Board advertisements, progress, and control messages never pass through Socket.IO.

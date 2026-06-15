@@ -15,7 +15,7 @@ graph TD
 ```
 
 ### 1.1. Unit Testing (Fast, Isolated)
-* **Scope**: Math helpers, cryptographic encodings, chunk index calculations, signaling room limits logic.
+* **Scope**: Math helpers, cryptographic encodings, encrypted board reducers, transfer identity, chunk framing, chunk index calculations, and signaling room limits logic.
 * **Tools**: Vitest is the preferred candidate for this Vite/Node project, but the test infrastructure is not yet installed. Adding it requires explicit dependency approval.
 * **Key Targets**:
   * Verify AES-GCM encryption and decryption outputs match standard vectors.
@@ -33,8 +33,8 @@ We must test that the Signaling Server correctly handles states, timeouts, and r
 
 * **Approach**: Use real `socket.io-client` connections against an in-process test server when possible. Socket mocks may be used only for narrow unit tests.
 * **Test Scenarios**:
-  * **Room Capacity**: Create a room as Host, join with Receiver A (succeeds), join with Receiver B (must fail with `room:error` code `ROOM_FULL`).
-  * **Host Disconnect Cleanup**: Connect Host, disconnect Host ➔ verify room is deleted from memory within 1 second.
+  * **Room Capacity**: Create a room as Peer A, join with Peer B, and reject Peer C with `ROOM_FULL`.
+  * **Peer Disconnect**: Disconnect either connected peer, keep the remaining peer in the room, and delete the room only after it becomes empty.
   * **Sanitization**: Emit `room:join` with malicious payloads (e.g. SQL injection strings or path traversals as Room ID) ➔ verify server rejects the input.
 
 ---
@@ -48,18 +48,18 @@ To verify actual WebRTC P2P transmission, we must automate interactions between 
 ```mermaid
 sequenceDiagram
     participant TestRunner as Playwright Test Runner
-    participant BrowserA as Sender Browser (Chrome)
-    participant BrowserB as Receiver Browser (Firefox or WebKit)
+    participant BrowserA as Peer A
+    participant BrowserB as Peer B
 
     Note over TestRunner: 1. Launch Browser A & Browser B
     TestRunner->>BrowserA: Open shipri.app
     Note over BrowserA: 2. Generate 50MB virtual file in RAM
-    TestRunner->>BrowserA: Drag virtual file to Dropzone
+    TestRunner->>BrowserA: Add virtual file to shared board
     BrowserA-->>TestRunner: Read generated Room URL from input box
     TestRunner->>BrowserB: Open Room URL (with E2EE hash key)
-    TestRunner->>BrowserB: Click "Accept & Download"
-    Note over BrowserA: 3. Starts streaming encrypted chunks
-    Note over BrowserB: 4. Receives chunks and saves to disk
+    TestRunner->>BrowserB: Click remote file and choose save target
+    Note over BrowserA: Streams requested encrypted chunks
+    Note over BrowserB: Receives chunks and saves to disk
     BrowserB-->>TestRunner: Transfer Completed Event
     Note over TestRunner: 5. Compare SHA-256 of downloaded file<br/>with original file. Verify they match.
 ```
@@ -71,20 +71,20 @@ import { test, expect, chromium } from '@playwright/test';
 
 test('E2E File Transfer: Chromium to Chromium', async () => {
   // Launch Host browser with media & permission bypass flags
-  const hostBrowser = await chromium.launch({
+  const peerABrowser = await chromium.launch({
     args: [
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
       '--no-sandbox'
     ]
   });
-  const hostContext = await hostBrowser.newContext();
-  const hostPage = await hostContext.newPage();
+  const peerAContext = await peerABrowser.newContext();
+  const peerAPage = await peerAContext.newPage();
   
   // Launch Receiver browser context
-  const receiverBrowser = await chromium.launch();
-  const receiverContext = await receiverBrowser.newContext();
-  const receiverPage = await receiverContext.newPage();
+  const peerBBrowser = await chromium.launch();
+  const peerBContext = await peerBBrowser.newContext();
+  const peerBPage = await peerBContext.newPage();
 
   // Test sequence goes here...
 });

@@ -68,13 +68,13 @@ Full backend development begins only after:
 * Replace `Math.random()` with Node.js CSPRNG.
 * Implement room authorization tokens according to the shared contract.
 * Strictly validate all event payloads and reject malformed room IDs.
-* Enforce exactly one host and one receiver.
+* Enforce a maximum of two authorized, equal room peers.
 * Prevent unauthorized sockets from relaying signals into a room.
-* Implement `room:leave`, host teardown, receiver disconnect behavior, idle TTL, maximum lifetime, and garbage collection.
+* Implement `room:leave`, peer disconnect behavior, empty-room teardown, idle TTL, maximum lifetime, and garbage collection.
 
 **Exit criteria:**
 
-* Integration tests pass for creation, joining, third-peer rejection, malformed input, unauthorized signal injection, leave, disconnect, TTL, and cleanup.
+* Integration tests pass for creation, joining, third-peer rejection, malformed input, unauthorized signal injection, either-peer leave, either-peer disconnect, TTL, and cleanup.
 * The frontend prototype visibly confirms the expected room lifecycle and stable errors.
 
 ### BE-3: Implement Abuse Controls and Safe Logging

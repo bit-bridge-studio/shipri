@@ -2,6 +2,8 @@
 
 These ticket drafts implement `backend_poc_plan.md` in dependency order. Each ticket includes its relevant tests and documentation updates.
 
+Existing GitHub issues targeted for synchronization: #1 through #19.
+
 ---
 
 ## 1. Documentation: Define the Backend POC Socket.IO event contract
@@ -27,9 +29,9 @@ When I test room behavior, I want stable lifecycle transitions and error codes, 
 
 ## Acceptance Criteria
 
-- The POC room lifecycle documents create, join, leave, receiver disconnect, and host disconnect behavior.
+- The POC room lifecycle documents create, join, either-peer leave, either-peer disconnect, and empty-room cleanup behavior.
 - Stable POC error codes and their triggering conditions are documented.
-- Room capacity is documented as one host and one receiver.
+- Room capacity is documented as two equal peers; creator/joiner identities define negotiation duties only.
 - Deferred TTL, rate-limit, and production authorization behavior is explicitly excluded.
 - Relevant protocol and testing documentation is updated.
 
@@ -145,14 +147,14 @@ When rooms are created or joined, I want canonical validated room IDs, so malfor
 
 ---
 
-## 9. Feature: Implement Backend POC room creation
+## 9. Feature: Implement Backend POC room creation for the first peer
 
-When I act as a host, I want to create a room, so a receiver can later join the signaling session.
+When I am the first peer, I want to create a room, so a second equal peer can join the signaling session.
 
 ## Acceptance Criteria
 
-- `room:create` creates an in-memory room with the requesting socket as host.
-- The host joins the corresponding Socket.IO room.
+- `room:create` creates an in-memory room with the requesting socket as its first peer.
+- The creating peer joins the corresponding Socket.IO room and receives the `offerer` negotiation duty.
 - `room:created` returns the documented POC payload.
 - Generated room IDs are unique among active rooms.
 - Integration tests verify successful room creation.
@@ -163,14 +165,15 @@ When I act as a host, I want to create a room, so a receiver can later join the 
 
 ---
 
-## 10. Feature: Implement receiver join and room capacity behavior
+## 10. Feature: Implement second-peer join and room capacity behavior
 
-When I act as a receiver, I want to join an available room and receive stable errors for invalid attempts, so room capacity behavior is predictable.
+When I open an available room, I want to join as an equal second peer and receive stable errors for invalid attempts, so room capacity behavior is predictable.
 
 ## Acceptance Criteria
 
-- `room:join` connects one receiver to an existing room.
-- The receiver receives `room:joined` and the host receives `peer:joined`.
+- `room:join` connects one second peer to an existing room.
+- The joining peer receives `room:joined` with `answerer` negotiation duty and the existing peer receives `peer:joined`.
+- Creator/joiner and offerer/answerer duties do not imply file owner/downloader roles.
 - Unknown rooms return `ROOM_NOT_FOUND`.
 - A third peer receives `ROOM_FULL`.
 - Integration tests cover successful join, unknown room, malformed room ID, and third-peer rejection.
@@ -188,10 +191,10 @@ When a connected peer intentionally leaves a room, I want the backend to update 
 ## Acceptance Criteria
 
 - `room:leave` removes the requesting socket from its active room.
-- A receiver leave keeps the host room available and notifies the host.
-- A host leave closes the room and notifies the receiver.
+- Either peer leave keeps the room available for the remaining peer and emits `peer:left`.
+- The room is deleted only after it becomes empty.
 - Repeated or unauthorized leave requests return the documented error behavior.
-- Integration tests cover host and receiver leave scenarios.
+- Integration tests cover either-peer leave, remaining-peer state, and empty-room cleanup.
 
 ## Notes
 
@@ -205,11 +208,11 @@ When a peer disconnects unexpectedly, I want room state and peer notifications t
 
 ## Acceptance Criteria
 
-- A host disconnect closes and removes its room.
-- A receiver disconnect clears the receiver slot while preserving the host room.
-- The remaining peer receives the documented stable disconnect error.
+- Either peer disconnect removes only that peer and preserves the room for the remaining member.
+- The remaining peer receives the documented `peer:left` disconnect notification.
+- The room is removed when the final peer disconnects.
 - Disconnected sockets are removed from the Socket.IO room.
-- Integration tests verify cleanup and notifications for both roles.
+- Integration tests verify cleanup and notifications for both peer positions.
 
 ## Notes
 
@@ -223,11 +226,11 @@ When SDP or ICE data is forwarded, I want only active room members to relay sign
 
 ## Acceptance Criteria
 
-- `signal:forward` accepts messages only from the active host or receiver of the specified room.
+- `signal:forward` accepts messages only from either active peer of the specified room.
 - Valid signals are delivered only to the other active room member.
 - Unknown rooms, malformed payloads, missing peers, and non-member senders follow documented error behavior.
 - The backend does not inspect or mutate valid `signalData`.
-- Integration tests verify bidirectional relay and unauthorized-sender rejection.
+- Integration tests verify bidirectional relay independent of transfer direction and unauthorized-peer rejection.
 - Security and signaling documentation is updated.
 
 ## Notes
@@ -335,7 +338,7 @@ When frontend prototype development is ready to begin, I want the Backend POC ac
 
 - All Backend POC unit and Socket.IO integration tests pass.
 - Local startup, syntax, HTTPS health, and remote WSS checks pass.
-- POC limitations and excluded production behavior are documented.
+- POC limitations and excluded production behavior are documented, including that transfer roles are never derived from room-entry order.
 - Local and staging frontend prototype connection instructions are documented.
 - The POC event contract is frozen for frontend prototype foundation work.
 - `backend_poc_plan.md` records the completed acceptance evidence.

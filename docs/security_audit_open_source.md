@@ -56,7 +56,7 @@ The signaling server handles active WebSocket rooms in-memory. In a public, open
 * **Risk**: A script could spam `room:create` thousands of times, filling the server's `activeRooms` Map and crashing the Node.js process due to memory exhaustion.
 * **Mitigation**:
   * **Rate Limiting**: Integrate rate-limiting middleware (like `express-rate-limit` for HTTP and custom timers for Socket.IO connection rates).
-  * **Room TTL / Expiry**: Rooms must expire automatically. The server checks and removes rooms older than 15 minutes if no receiver joins, and forces a deletion after 24 hours.
+  * **Room TTL / Expiry**: Rooms must expire automatically. The server removes inactive waiting rooms after the documented idle timeout and forces deletion after the maximum lifetime.
   * **Memory Limits**: Restrict max room count:
     ```javascript
     const MAX_ROOMS = 5000;
@@ -71,7 +71,7 @@ The signaling server handles active WebSocket rooms in-memory. In a public, open
 * **Risk**: An attacker could join random room IDs or broadcast fake messages.
 * **Mitigation**:
   * The server enforces a capacity limit of exactly 2.
-  * On `room:join`, the server verifies if `receiverSocketId` is null. If it is already set, it rejects the joining socket.
+  * On `room:join`, the server verifies that the authorized room has fewer than two active peers. A third connection is rejected.
   * Regular expressions must validate `roomId` format to prevent malformed socket channel names and injection-style payloads: `/^ship-[a-f0-9]{4}$/`.
 
 ---

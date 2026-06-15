@@ -1,242 +1,184 @@
 # Signaling Protocol & Room Logic Specification (Shipri)
 
-This document specifies the communication protocol between the client applications and the Node.js signaling server using Socket.IO. The signaling server is responsible only for orchestrating rooms and relaying WebRTC metadata; it never touches file contents.
+The Socket.IO signaling server coordinates two browser peers and relays WebRTC negotiation data. It never receives file-board state, plaintext file metadata, file requests, file contents, or transfer progress.
 
 ---
 
-## 1. Lifecycle of a Room & State Machine
+## 1. Canonical Peer Model
 
-Each session room goes through a predefined life cycle. The signaling server must enforce these states strictly to prevent multi-peer collisions and stale memory allocation.
+* A room contains zero, one, or two authorized peers.
+* Both connected members are equal product peers and may publish local files or request remote files.
+* `creator` and `joiner` describe room-entry history only.
+* The creator is the deterministic initial WebRTC offerer and the joiner is the initial answerer. These negotiation duties never define transfer direction.
+* A room remains available while at least one authorized peer is connected. It is removed when empty or expired.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle : Client initializes page
-    Idle --> RoomCreated : Emits room:create
-    RoomCreated --> PeerConnected : Receiver joins (room:join)
-    PeerConnected --> PeerDisconnected : Receiver leaves / drops
-    PeerDisconnected --> RoomCreated : Awaiting re-connection
-    PeerConnected --> RoomClosed : Host leaves / disconnects
-    RoomCreated --> RoomClosed : Host leaves / expires
-    RoomClosed --> [*] : Server garbage-collects room memory
+    [*] --> Empty
+    Empty --> WaitingForPeer : room:create
+    WaitingForPeer --> Connected : room:join
+    Connected --> WaitingForPeer : either peer leaves or disconnects
+    WaitingForPeer --> Empty : remaining peer leaves or room expires
+    Empty --> [*]
 ```
 
-### 1.1. State Definitions:
-* **`RoomCreated` (1 Peer)**: The Host (Sender) is in the room alone, waiting for a Receiver to join.
-* **`PeerConnected` (2 Peers)**: Both Host and Receiver are active. P2P WebRTC handshake is initiated.
-* **`PeerDisconnected` (1 Peer)**: The Receiver dropped. The Host is waiting for a reconnect.
-* **`RoomClosed` (0 Peers)**: The session has terminated. The server clears the room identifier from memory.
+---
+
+## 2. Room Rules
+
+1. Room capacity is exactly two active connections.
+2. Room IDs use `ship-[a-f0-9]{4}` and cryptographically secure generation.
+3. Production room authorization is independent from the short room ID.
+4. Both members may relay signaling data only to the other active member.
+5. A third connection receives `ROOM_FULL`.
+6. An empty room is deleted immediately. Idle and maximum lifetime rules are enforced by the production backend.
 
 ---
 
-## 2. Room Management & Allocation Rules
+## 3. Socket.IO Events
 
-1. **Room Capacity Limit**: A room must never allow more than **2 connections** simultaneously. Any additional connection attempt to a full room must be rejected immediately with an error event.
-2. **Room ID Format**: IDs must be short, secure, and URL-friendly. The canonical format is `ship-[a-f0-9]{4}` (for example, `ship-83a1`).
-   * The server must generate the random suffix with a cryptographically secure source such as Node.js `crypto.randomBytes`, not `Math.random()`.
-   * The join path must validate room IDs with `/^ship-[a-f0-9]{4}$/`.
-3. **Garbage Collection (GC)**:
-   * If a room is created but no second peer joins within **15 minutes**, the server automatically closes the room and disconnects the Host.
-   * If both peers disconnect, the room is deleted instantly.
-   * Maximum room lifetime is capped at **24 hours** to prevent memory leaks from long-lived hanging sockets.
+### 3.1. Create Room
 
----
+Client emits:
 
-## 3. Socket.IO Event Specification
-
-All communications are JSON payloads sent via Socket.IO events.
-
-### 3.1. Room Creation (Host Workflow)
-
-#### A. Client Emits: `room:create`
-Sent by the sender client to request a new room.
 ```json
-{}
+{ "event": "room:create", "payload": {} }
 ```
 
-#### B. Server Responds: `room:created`
-Sent to the creator client if room allocation succeeds.
+Server responds:
+
 ```json
 {
-  "roomId": "ship-83a1",
-  "socketId": "socket_id_of_host"
-}
-```
-
----
-
-### 3.2. Joining a Room (Receiver Workflow)
-
-#### A. Client Emits: `room:join`
-Sent by the receiver client when loading the shared URL.
-```json
-{
-  "roomId": "ship-83a1"
-}
-```
-
-#### B. Server Responses:
-* **Success**: Server joins the socket to the rooms list and emits `room:joined` to the Receiver.
-  ```json
-  {
+  "event": "room:created",
+  "payload": {
     "roomId": "ship-83a1",
-    "role": "receiver"
-  }
-  ```
-  And simultaneously broadcasts `peer:joined` to the Host:
-  ```json
-  {
-    "peerSocketId": "socket_id_of_receiver"
-  }
-  ```
-
-* **Failure (Room Full)**: Server emits `room:error` to the attempting joiner if 2 peers are already connected.
-  ```json
-  {
-    "code": "ROOM_FULL",
-    "message": "This room already has 2 active peers."
-  }
-  ```
-
-* **Failure (Room Not Found / Expired)**: Server emits `room:error` if the room ID doesn't exist.
-  ```json
-  {
-    "code": "ROOM_NOT_FOUND",
-    "message": "The requested room does not exist or has expired."
-  }
-  ```
-
----
-
-### 3.3. WebRTC Signal Relay
-
-WebRTC clients must exchange Session Description Protocol (SDP) configurations and Interactive Connectivity Establishment (ICE) candidates to discover each other. The server acts as a blind relay.
-
-#### A. Client Emits: `signal:forward`
-Sent by either client when the local WebRTC stack generates an SDP description or ICE candidate.
-```json
-{
-  "roomId": "ship-83a1",
-  "signalData": {
-    "type": "offer",
-    "sdp": "... cryptographic descriptors ...",
-    "candidate": null
+    "peerId": "opaque_peer_id",
+    "negotiationDuty": "offerer"
   }
 }
 ```
 
-For ICE candidates, `signalData` contains the candidate payload generated by the browser:
+### 3.2. Join Room
+
+Client emits:
 
 ```json
 {
-  "roomId": "ship-83a1",
-  "signalData": {
-    "candidate": {
-      "candidate": "...",
-      "sdpMid": "0",
-      "sdpMLineIndex": 0
-    }
+  "event": "room:join",
+  "payload": {
+    "roomId": "ship-83a1"
   }
 }
 ```
 
-#### B. Server Action: Relays `signal:receive`
-The server catches `signal:forward` and immediately sends it to the *other* socket in the Room.
+Server confirms membership to the joining peer:
+
 ```json
 {
-  "signalData": {
-    "type": "offer",
-    "sdp": "..."
+  "event": "room:joined",
+  "payload": {
+    "roomId": "ship-83a1",
+    "peerId": "opaque_peer_id",
+    "negotiationDuty": "answerer"
   }
 }
 ```
 
----
-
-### 3.4. ICE Server Credentials
-
-Clients request STUN/TURN configuration from the signaling server before creating the `RTCPeerConnection`.
-
-#### A. Client Emits: `ice:get`
-
-```json
-{}
-```
-
-#### B. Server Responds: `ice:credentials`
+The existing member receives:
 
 ```json
 {
-  "iceServers": [
-    {
-      "urls": [
-        "stun:stun.l.google.com:19302",
-        "stun:stun1.l.google.com:19302"
-      ]
-    },
-    {
-      "urls": [
-        "turn:turn.shipri.app:3478?transport=udp",
-        "turn:turn.shipri.app:3478?transport=tcp",
-        "turns:turn.shipri.app:443?transport=tcp"
-      ],
-      "username": "1785239200:socket-or-room-bound-id",
-      "credential": "computed_hmac_sha1_signature_string"
-    }
-  ]
+  "event": "peer:joined",
+  "payload": {
+    "peerId": "opaque_peer_id"
+  }
 }
 ```
 
-TURN credentials must be ephemeral and generated from `TURN_SHARED_SECRET` as described in `nat_traversal_strategy.md`.
+### 3.3. Leave and Disconnect
+
+Either peer may emit:
+
+```json
+{
+  "event": "room:leave",
+  "payload": {
+    "roomId": "ship-83a1"
+  }
+}
+```
+
+The remaining peer receives:
+
+```json
+{
+  "event": "peer:left",
+  "payload": {
+    "peerId": "opaque_peer_id",
+    "reason": "leave"
+  }
+}
+```
+
+Disconnect uses the same `peer:left` event with `reason: "disconnect"`. The remaining peer stays in the room and becomes the offerer for a future replacement connection.
+
+### 3.4. Signal Relay
+
+Either room member emits:
+
+```json
+{
+  "event": "signal:forward",
+  "payload": {
+    "roomId": "ship-83a1",
+    "signalData": {}
+  }
+}
+```
+
+The backend validates membership and relays the opaque `signalData` only to the other active peer as `signal:receive`.
+
+### 3.5. ICE Credentials
+
+Authorized peers emit `ice:get`. The server returns `ice:credentials` with the configured STUN/TURN servers. TURN credentials are ephemeral and never expose `TURN_SHARED_SECRET`.
+
+### 3.6. Stable Errors
+
+All room failures use `room:error` with a stable `code`. Required codes include:
+
+* `ROOM_NOT_FOUND`
+* `ROOM_FULL`
+* `INVALID_ROOM_ID`
+* `UNAUTHORIZED`
+* `PEER_UNAVAILABLE`
+* `SERVER_BUSY`
 
 ---
 
-### 3.5. Disconnections & Room Tear-Down
-
-#### A. Receiver Disconnects (`disconnect` or `room:leave` event)
-1. The server detects socket disconnect.
-2. The server remains active but transitions the room state from `PeerConnected` back to `RoomCreated`.
-3. The server notifies the Host through `room:error`:
-   ```json
-   {
-     "code": "RECEIVER_DISCONNECTED",
-     "message": "Receiver disconnected. Awaiting reconnection..."
-   }
-   ```
-
-#### B. Host Disconnects (`disconnect`)
-1. The server detects that the Host (owner of the room) has disconnected.
-2. The server notifies the Receiver that the host is gone through `room:error`:
-   ```json
-   {
-     "code": "HOST_DISCONNECTED",
-     "message": "Host disconnected. Room closing."
-   }
-   ```
-3. The server deletes the room registry and forces the Receiver's socket to leave the Socket.IO room channel.
-
----
-
-## 4. Server Memory Schema (JSON Reference)
-
-To maintain maximum performance and low memory footprint, the server stores room metadata in-memory using an object map (or Redis if scaling horizontally in the future):
+## 4. Server Memory Schema
 
 ```typescript
-interface Room {
-  roomId: string;
-  hostSocketId: string;
-  receiverSocketId: string | null;
-  createdAt: number; // timestamp
-  expiresAt: number; // timestamp
+interface RoomPeer {
+  peerId: string;
+  socketId: string;
+  joinedAt: number;
 }
 
-const activeRooms: Map<string, Room> = new Map();
+interface Room {
+  roomId: string;
+  peers: RoomPeer[];
+  createdAt: number;
+  expiresAt: number;
+}
 ```
+
+The backend stores no file-board or transfer state.
 
 ---
 
-## 5. Security & Rate Limiting
+## 5. Security and Validation
 
-To prevent Denial of Service (DoS) attacks on the signaling server:
-1. **IP Rate Limiting**: Limit IP addresses to a maximum of 5 `room:create` emissions per minute.
-2. **Input Validation**: Strictly sanitize the `roomId` parameters on `room:join` using `/^ship-[a-f0-9]{4}$/` to prevent malformed socket channel names and injection-style payloads.
-3. **No Database Writes**: Room indexing is strictly in-memory (volatile). Disk storage is never used on the signaling server.
+* Validate every payload and room membership before relaying.
+* Treat peer and socket identifiers as opaque operational data.
+* Do not log SDP bodies, ICE credentials, authorization tokens, E2EE keys, file metadata, or transfer payloads.
+* Apply production authorization, CORS, rate limits, room limits, and TTL as defined by the backend and security plans.
