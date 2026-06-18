@@ -1,0 +1,9 @@
+services:
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: shipri-client
+    restart: unless-stopped
+    ports:
+      - "8080:80"
