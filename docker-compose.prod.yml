@@ -6,8 +6,11 @@ services:
     container_name: shipri-client
     restart: unless-stopped
     networks:
+      - shipri-network
       - nginx-proxy
 
 networks:
+  shipri-network:
+    name: shipri-network
   nginx-proxy:
     external: true
