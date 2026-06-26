@@ -32,10 +32,17 @@ The current `client/package.json` and `server/package.json` do not define `test`
 We must test that the Signaling Server correctly handles states, timeouts, and rate limits without spinning up full browsers.
 
 * **Approach**: Use real `socket.io-client` connections against an in-process test server when possible. Socket mocks may be used only for narrow unit tests.
-* **Test Scenarios**:
+* **Contract Source**: `signaling_protocol_spec.md` defines the canonical Socket.IO event and payload schemas. Backend POC tests must assert the documented POC contract rather than implementation-private room state.
+* **Backend POC Contract Test Scenarios**:
+  * **Event Payload Shapes**: Verify `room:create`, `room:created`, `room:join`, `room:joined`, `peer:joined`, `room:leave`, `peer:left`, `signal:forward`, `signal:receive`, `ice:get`, `ice:credentials`, and `room:error` use the documented payload schemas.
+  * **Canonical Naming**: Verify room identifiers appear only as `roomId` in Socket.IO payloads; `room_id` is rejected or absent from all successful responses.
   * **Room Capacity**: Create a room as Peer A, join with Peer B, and reject Peer C with `ROOM_FULL`.
-  * **Peer Disconnect**: Disconnect either connected peer, keep the remaining peer in the room, and delete the room only after it becomes empty.
-  * **Sanitization**: Emit `room:join` with malicious payloads (e.g. SQL injection strings or path traversals as Room ID) ➔ verify server rejects the input.
+  * **Peer Disconnect**: Disconnect either connected peer, emit `peer:left` with `reason: "disconnect"` to the remaining peer, keep the remaining peer in the room, and delete the room only after it becomes empty.
+  * **Explicit Leave**: Emit `room:leave`, notify the remaining peer with `peer:left` and `reason: "leave"`, and remove an empty room after the final peer leaves.
+  * **Signaling Relay**: Relay opaque `signalData` bidirectionally through `signal:forward` and `signal:receive` only between active room members without inspecting or mutating the payload.
+  * **Development ICE**: Emit `ice:get` with `roomId` from an active room member and receive `ice:credentials` with documented STUN-only `iceServers`.
+  * **Sanitization**: Emit `room:join` with malicious payloads (for example SQL injection strings or path traversals as room IDs) and verify the server rejects the input with a stable `room:error` code.
+  * **POC Boundaries**: Verify POC tests do not require deferred production behavior such as access tokens, TTL cleanup, rate limits, dynamic TURN credentials, Redis, or persistent storage.
 
 ---
 
