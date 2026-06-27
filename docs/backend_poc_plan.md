@@ -60,11 +60,39 @@ The initial frontend prototype may rely on the Socket.IO events below. `signalin
 
 All payloads use `roomId` in camelCase. POC signal forwarding must verify that the emitting peer is one of the room's two members and must relay `signalData` without inspecting or mutating it. POC creator/joiner identities are negotiation duties only.
 
+### POC Room Lifecycle
+
+One socket may belong to at most one active Shipri room. A room with one peer waits for another peer, and a room with two peers is full. If either connected peer leaves or disconnects, the room returns to the one-peer state and the remaining peer becomes the offerer for a future replacement. If the final peer leaves or disconnects, the backend deletes the empty room immediately.
+
+| Current state | Trigger | Result |
+| :--- | :--- | :--- |
+| No room | `room:create` | Create a one-peer room; creator receives `offerer` duty. |
+| One peer | `room:join` | Add the second peer; joiner receives `answerer` duty and the existing peer receives `peer:joined`. |
+| Two peers | Third `room:join` | Keep both existing members and reject the third socket with `ROOM_FULL`. |
+| Two peers | Either peer leaves or disconnects | Keep the remaining peer and emit `peer:left` with `leave` or `disconnect`. |
+| One peer | Final peer leaves or disconnects | Delete the empty room without emitting `peer:left`. |
+
+### POC Error Conditions
+
+Failed operations do not change room membership. Validation uses this precedence: payload shape, `roomId` format, room existence, socket membership, room capacity or peer availability, then service configuration.
+
+| Code | Triggering condition |
+| :--- | :--- |
+| `INVALID_PAYLOAD` | Invalid top-level payload or invalid non-room field. |
+| `INVALID_ROOM_ID` | Missing, non-string, or non-canonical `roomId`. |
+| `ROOM_NOT_FOUND` | A canonical `roomId` has no active room. |
+| `UNAUTHORIZED` | The socket already belongs to another Shipri room or is not a member of the requested room operation. |
+| `ROOM_FULL` | An eligible third socket tries to join a two-peer room. |
+| `PEER_UNAVAILABLE` | A room member tries to relay a signal before a second peer joins. |
+| `SERVER_BUSY` | Development ICE configuration is missing or invalid. |
+
+`signaling_protocol_spec.md` is canonical for event-specific error conditions and `room:error` payload behavior.
+
 The POC deliberately differs from production in these ways:
 
 * Room membership is validated through active socket state, not production access tokens.
 * ICE credentials are development-only STUN entries without TURN credentials.
-* Room TTL, rate limits, full production CORS, dynamic TURN credentials, persistent storage, and operational hardening are deferred.
+* Waiting rooms remain until the final peer leaves, disconnects, or the process restarts. Room TTL, rate limits, maximum room counts, full production CORS, dynamic TURN credentials, persistent storage, and operational hardening are deferred.
 
 ---
 
@@ -103,13 +131,14 @@ The POC deliberately differs from production in these ways:
 
 * Create rooms with the canonical `ship-[a-f0-9]{4}` development ID.
 * Join exactly one second peer.
-* Return stable `ROOM_NOT_FOUND`, `ROOM_FULL`, and validation errors.
+* Enforce one active Shipri room membership per socket.
+* Return the documented validation, room-state, membership, and service errors.
 * Implement explicit leave and disconnect cleanup.
 * Notify the remaining peer when the other peer leaves.
 
 **Exit criteria:**
 
-* Integration tests pass for create, join, third-peer rejection, leave, and disconnect cleanup.
+* Integration tests pass for create, join, third-peer rejection, either-peer leave or disconnect, replacement-peer join, repeated leave, and empty-room cleanup.
 
 ### BP-3: Implement Membership-Safe Signaling Relay
 

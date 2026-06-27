@@ -29,16 +29,22 @@ The current `client/package.json` and `server/package.json` do not define `test`
 
 ## 2. Integration Testing (Signaling Protocol)
 
-We must test that the Signaling Server correctly handles states, timeouts, and rate limits without spinning up full browsers.
+We must test that the Signaling Server correctly handles its documented room states and errors without spinning up full browsers. Timeout, rate-limit, and production authorization scenarios are added with the production backend and are not Backend POC requirements.
 
 * **Approach**: Use real `socket.io-client` connections against an in-process test server when possible. Socket mocks may be used only for narrow unit tests.
 * **Contract Source**: `signaling_protocol_spec.md` defines the canonical Socket.IO event and payload schemas. Backend POC tests must assert the documented POC contract rather than implementation-private room state.
 * **Backend POC Contract Test Scenarios**:
   * **Event Payload Shapes**: Verify `room:create`, `room:created`, `room:join`, `room:joined`, `peer:joined`, `room:leave`, `peer:left`, `signal:forward`, `signal:receive`, `ice:get`, `ice:credentials`, and `room:error` use the documented payload schemas.
   * **Canonical Naming**: Verify room identifiers appear only as `roomId` in Socket.IO payloads; `room_id` is rejected or absent from all successful responses.
+  * **Single Membership**: Verify one socket cannot create or join a second Shipri room while it has an active room membership.
+  * **Lifecycle Transitions**: Verify no-room to one-peer creation, one-peer to two-peer join, two-peer to one-peer leave or disconnect, replacement-peer join, and one-peer to deleted-room cleanup.
   * **Room Capacity**: Create a room as Peer A, join with Peer B, and reject Peer C with `ROOM_FULL`.
   * **Peer Disconnect**: Disconnect either connected peer, emit `peer:left` with `reason: "disconnect"` to the remaining peer, keep the remaining peer in the room, and delete the room only after it becomes empty.
   * **Explicit Leave**: Emit `room:leave`, notify the remaining peer with `peer:left` and `reason: "leave"`, and remove an empty room after the final peer leaves.
+  * **Negotiation Duties After Leave**: Verify the remaining peer becomes the next offerer and a replacement peer joins as answerer, regardless of which original peer left.
+  * **Stable Error Matrix**: Verify each client event returns the documented first matching `INVALID_PAYLOAD`, `INVALID_ROOM_ID`, `ROOM_NOT_FOUND`, `UNAUTHORIZED`, `ROOM_FULL`, `PEER_UNAVAILABLE`, or `SERVER_BUSY` error.
+  * **Error Atomicity**: Verify `room:error` is emitted only to the requesting socket and failed operations do not change room or socket membership.
+  * **Repeated Leave**: Verify a repeated leave returns `UNAUTHORIZED` while another peer keeps the room active, or `ROOM_NOT_FOUND` after the final peer's first leave deletes the room.
   * **Signaling Relay**: Relay opaque `signalData` bidirectionally through `signal:forward` and `signal:receive` only between active room members without inspecting or mutating the payload.
   * **Development ICE**: Emit `ice:get` with `roomId` from an active room member and receive `ice:credentials` with documented STUN-only `iceServers`.
   * **Sanitization**: Emit `room:join` with malicious payloads (for example SQL injection strings or path traversals as room IDs) and verify the server rejects the input with a stable `room:error` code.
