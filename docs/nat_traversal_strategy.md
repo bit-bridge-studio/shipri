@@ -51,12 +51,15 @@ To prevent unauthorized parties from using our TURN server as a free proxy for g
 ### API Payload Schema
 The client emits a request `ice:get` to the signaling server:
 ```json
-{}
+{
+  "roomId": "ship-83a1"
+}
 ```
 
 The server responds with the `ice:credentials` payload:
 ```json
 {
+  "roomId": "ship-83a1",
   "iceServers": [
     {
       "urls": [

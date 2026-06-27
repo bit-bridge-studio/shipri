@@ -41,24 +41,30 @@ The POC staging deployment is a restricted test environment, not a public produc
 
 ## 3. POC Contract
 
-The initial frontend prototype may rely on these Socket.IO events:
+The initial frontend prototype may rely on the Socket.IO events below. `signaling_protocol_spec.md` is the canonical event and payload schema source; this plan summarizes the POC implementation surface.
 
-| Direction | Event | Purpose |
-| :--- | :--- | :--- |
-| Client to server | `room:create` | Create a room for the first peer. |
-| Server to client | `room:created` | Return the created `roomId` and `offerer` negotiation duty. |
-| Client to server | `room:join` | Join the second peer to a room. |
-| Server to client | `room:joined` | Confirm room membership and `answerer` negotiation duty. |
-| Server to client | `peer:joined` | Notify the existing peer that the second peer joined. |
-| Server to client | `peer:left` | Notify the remaining peer about leave or disconnect. |
-| Client to server | `signal:forward` | Relay SDP or ICE data to the other room member. |
-| Server to client | `signal:receive` | Deliver relayed SDP or ICE data. |
-| Client to server | `ice:get` | Request development ICE configuration. |
-| Server to client | `ice:credentials` | Return development STUN configuration. |
-| Client to server | `room:leave` | Leave the active room explicitly. |
-| Server to client | `room:error` | Return a stable room or validation error. |
+| Direction | Event | POC payload schema | Purpose |
+| :--- | :--- | :--- | :--- |
+| Client to server | `room:create` | `{}` | Create a room for the first peer. |
+| Server to client | `room:created` | `{ roomId, peerId, negotiationDuty: "offerer" }` | Return the created room and deterministic offerer duty. |
+| Client to server | `room:join` | `{ roomId }` | Join the second peer to a room. |
+| Server to client | `room:joined` | `{ roomId, peerId, negotiationDuty: "answerer" }` | Confirm room membership and answerer duty. |
+| Server to client | `peer:joined` | `{ roomId, peerId }` | Notify the existing peer that the second peer joined. |
+| Client to server | `room:leave` | `{ roomId }` | Leave the active room explicitly. |
+| Server to client | `peer:left` | `{ roomId, peerId, reason }` | Notify the remaining peer about leave or disconnect. |
+| Client to server | `signal:forward` | `{ roomId, signalData }` | Relay opaque SDP or ICE data to the other room member. |
+| Server to client | `signal:receive` | `{ roomId, peerId, signalData }` | Deliver relayed opaque SDP or ICE data. |
+| Client to server | `ice:get` | `{ roomId }` | Request development ICE configuration for an active room member. |
+| Server to client | `ice:credentials` | `{ roomId, iceServers }` | Return development STUN-only configuration. |
+| Server to client | `room:error` | `{ roomId?, code, message }` | Return a stable room, membership, validation, or service error. |
 
-All payloads use `roomId` in camelCase. POC signal forwarding must verify that the emitting peer is one of the room's two members. POC creator/joiner identities are negotiation duties only.
+All payloads use `roomId` in camelCase. POC signal forwarding must verify that the emitting peer is one of the room's two members and must relay `signalData` without inspecting or mutating it. POC creator/joiner identities are negotiation duties only.
+
+The POC deliberately differs from production in these ways:
+
+* Room membership is validated through active socket state, not production access tokens.
+* ICE credentials are development-only STUN entries without TURN credentials.
+* Room TTL, rate limits, full production CORS, dynamic TURN credentials, persistent storage, and operational hardening are deferred.
 
 ---
 

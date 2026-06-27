@@ -44,6 +44,7 @@ If new scripts are added later, prefer those scripts over ad hoc commands.
 - Documentation updates are mandatory when behavior, protocol, security, deployment, networking, or UX changes.
 - Keep the relevant files in `docs/` synchronized with implementation changes.
 - Documentation and code comments must be written in English.
+- Use TypeScript notation for documentation schemas, protocol contracts, and payload shapes for readability. This is a documentation convention only and does not imply migrating the JavaScript implementation to TypeScript.
 - User-facing conversation should use the language the user used.
 
 ## Current Knowledge and Context7
