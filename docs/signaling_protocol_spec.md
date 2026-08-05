@@ -10,7 +10,7 @@ The Socket.IO signaling server coordinates two browser peers and relays WebRTC n
 * Both connected members are equal product peers and may publish local files or request remote files.
 * `creator` and `joiner` describe room-entry history only.
 * The creator is the deterministic initial WebRTC offerer and the joiner is the initial answerer. These negotiation duties never define transfer direction.
-* A room remains available while at least one peer is connected. It is removed immediately when empty.
+* The base room lifecycle keeps a room available while at least one peer is connected. Empty-room cleanup is immediate: when the last active peer leaves or disconnects, the room is deleted.
 
 ```mermaid
 stateDiagram-v2
@@ -31,7 +31,7 @@ stateDiagram-v2
 3. Production room authorization is independent from the short room ID.
 4. Both members may relay signaling data only to the other active member.
 5. A third connection receives `ROOM_FULL`.
-6. An empty room is deleted immediately. Idle and maximum lifetime rules are enforced by the production backend.
+6. An empty room is always deleted immediately. Production idle and maximum lifetime rules may delete non-empty rooms earlier.
 7. In the Backend POC, one socket may have at most one active Shipri room membership.
 
 ### 2.1. Backend POC Lifecycle
@@ -50,7 +50,9 @@ stateDiagram-v2
 
 After either peer leaves a connected room, the remaining peer becomes the offerer for the next replacement peer. A replacement joins through the same `WaitingForPeer` to `Connected` transition and receives `answerer` duty.
 
-The Backend POC does not expire a waiting room and does not apply TTL, rate limits, maximum room counts, or production access tokens. Those controls are added by the production backend. Socket.IO automatically removes a disconnected socket from adapter rooms; the backend must still remove its application room membership and notify any remaining peer during disconnect cleanup.
+Empty-room cleanup is shared by the Backend POC and production lifecycle: when the last active peer leaves or disconnects, the room is deleted immediately.
+
+The Backend POC does not expire a waiting or connected room by TTL and does not apply rate limits, maximum room counts, or production access tokens. Production may additionally expire waiting or connected rooms through idle TTL, maximum lifetime, and garbage collection rules defined by the backend development plan. Socket.IO automatically removes a disconnected socket from adapter rooms; the backend must still remove its application room membership and notify any remaining peer during disconnect cleanup.
 
 ---
 
