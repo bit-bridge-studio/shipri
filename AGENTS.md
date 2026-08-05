@@ -91,6 +91,8 @@ If new scripts are added later, prefer those scripts over ad hoc commands.
 ## Git
 
 - Do not create commits, branches, tags, or pull requests unless explicitly requested.
+- Do not add agent or tool attribution such as `codex/`, `[codex]`, `Codex`, or similar markers to branch names, commit messages, pull request titles or bodies, issues, or comments unless the user explicitly requests it.
+- Use task-focused branch names, commit messages, and pull request titles without agent-specific prefixes.
 - Do not revert user changes unless explicitly requested.
 - Treat unrelated worktree changes as user-owned and leave them alone.
 

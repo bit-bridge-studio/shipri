@@ -30,9 +30,13 @@ When I test room behavior, I want stable lifecycle transitions and error codes, 
 ## Acceptance Criteria
 
 - The POC room lifecycle documents create, join, either-peer leave, either-peer disconnect, and empty-room cleanup behavior.
+- The lifecycle documents that one socket may have at most one active Shipri room membership.
+- Replacement-peer behavior is documented: after either peer leaves or disconnects, the remaining peer stays in the room, becomes the next `offerer`, and a future replacement peer joins as `answerer`.
+- Repeated leave behavior is documented for both one-peer and two-peer cleanup paths.
 - Stable POC error codes and their triggering conditions are documented.
+- Error precedence is documented so malformed payloads, invalid `roomId`, missing rooms, membership failures, capacity, peer availability, and service configuration errors resolve predictably.
 - Room capacity is documented as two equal peers; creator/joiner identities define negotiation duties only.
-- Deferred TTL, rate-limit, and production authorization behavior is explicitly excluded.
+- Deferred TTL, rate-limit, production authorization, and production garbage-collection behavior is explicitly excluded from the Backend POC.
 - Relevant protocol and testing documentation is updated.
 
 ---
@@ -129,10 +133,11 @@ When I am the first peer, I want to create a room, so a second equal peer can jo
 ## Acceptance Criteria
 
 - `room:create` creates an in-memory room with the requesting socket as its first peer.
+- `room:create` rejects a socket that already has an active Shipri room membership with the documented membership error.
 - The creating peer joins the corresponding Socket.IO room and receives the `offerer` negotiation duty.
 - `room:created` returns the documented POC payload.
 - Generated room IDs are unique among active rooms.
-- Integration tests verify successful room creation.
+- Integration tests verify successful room creation and duplicate active membership rejection.
 
 ---
 
@@ -142,12 +147,14 @@ When I open an available room, I want to join as an equal second peer and receiv
 
 ## Acceptance Criteria
 
-- `room:join` connects one second peer to an existing room.
+- `room:join` connects one eligible peer to an existing one-peer room, including a replacement join after a previous peer leaves or disconnects.
 - The joining peer receives `room:joined` with `answerer` negotiation duty and the existing peer receives `peer:joined`.
+- After a leave or disconnect, the remaining peer is treated as the next `offerer` and the replacement peer joins as `answerer`.
 - Creator/joiner and offerer/answerer duties do not imply file owner/downloader roles.
 - Unknown rooms return `ROOM_NOT_FOUND`.
 - A third peer receives `ROOM_FULL`.
-- Integration tests cover successful join, unknown room, malformed room ID, and third-peer rejection.
+- A socket with an existing active Shipri room membership cannot join another room.
+- Integration tests cover successful join, replacement join, unknown room, malformed room ID, duplicate active membership, and third-peer rejection.
 
 ---
 
@@ -159,9 +166,10 @@ When a connected peer intentionally leaves a room, I want the backend to update 
 
 - `room:leave` removes the requesting socket from its active room.
 - Either peer leave keeps the room available for the remaining peer and emits `peer:left`.
-- The room is deleted only after it becomes empty.
-- Repeated or unauthorized leave requests return the documented error behavior.
-- Integration tests cover either-peer leave, remaining-peer state, and empty-room cleanup.
+- The remaining peer becomes the next `offerer` for a future replacement peer.
+- The room is deleted immediately after the final peer leaves.
+- Repeated or unauthorized leave requests follow documented error precedence and return the documented error behavior.
+- Integration tests cover either-peer leave, remaining-peer state, replacement join after leave, repeated leave, and empty-room cleanup.
 
 ---
 
@@ -173,9 +181,10 @@ When a peer disconnects unexpectedly, I want room state and peer notifications t
 
 - Either peer disconnect removes only that peer and preserves the room for the remaining member.
 - The remaining peer receives the documented `peer:left` disconnect notification.
-- The room is removed when the final peer disconnects.
+- The remaining peer becomes the next `offerer` for a future replacement peer.
+- The room is removed immediately when the final peer disconnects.
 - Disconnected sockets are removed from the Socket.IO room.
-- Integration tests verify cleanup and notifications for both peer positions.
+- Integration tests verify cleanup, notifications for both peer positions, replacement join after disconnect, and empty-room cleanup.
 
 ---
 
@@ -188,6 +197,7 @@ When SDP or ICE data is forwarded, I want only active room members to relay sign
 - `signal:forward` accepts messages only from either active peer of the specified room.
 - Valid signals are delivered only to the other active room member.
 - Unknown rooms, malformed payloads, missing peers, and non-member senders follow documented error behavior.
+- Validation follows documented error precedence before any signal is relayed.
 - The backend does not inspect or mutate valid `signalData`.
 - Integration tests verify bidirectional relay independent of transfer direction and unauthorized-peer rejection.
 - Security and signaling documentation is updated.
@@ -203,7 +213,8 @@ When the frontend prototype requests ICE configuration, I want the Backend POC t
 - `ice:get` returns the documented `ice:credentials` payload.
 - The response contains configured public STUN endpoints and no TURN credentials.
 - Invalid ICE configuration produces the documented configuration error.
-- Tests verify successful and invalid configuration responses.
+- Only active room members can request ICE configuration for their room.
+- Tests verify successful responses, unauthorized requests, and invalid configuration responses.
 - The response is documented as development-only.
 
 ---
@@ -277,6 +288,7 @@ When frontend prototype development is ready to begin, I want the Backend POC ac
 - All Backend POC unit and Socket.IO integration tests pass.
 - Local startup, syntax, HTTPS health, and remote WSS checks pass.
 - POC limitations and excluded production behavior are documented, including that transfer roles are never derived from room-entry order.
+- Acceptance evidence covers single active membership, replacement-peer joins, next-`offerer` behavior after leave or disconnect, repeated leave behavior, error precedence, and immediate empty-room cleanup.
 - Local and staging frontend prototype connection instructions are documented.
 - The POC event contract is frozen for frontend prototype foundation work.
 - `backend_poc_plan.md` records the completed acceptance evidence.

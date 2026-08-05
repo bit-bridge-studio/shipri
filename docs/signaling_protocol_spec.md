@@ -6,20 +6,20 @@ The Socket.IO signaling server coordinates two browser peers and relays WebRTC n
 
 ## 1. Canonical Peer Model
 
-* A room contains zero, one, or two authorized peers.
+* A room contains zero, one, or two active peers. Production authorization is defined separately from POC socket membership.
 * Both connected members are equal product peers and may publish local files or request remote files.
 * `creator` and `joiner` describe room-entry history only.
 * The creator is the deterministic initial WebRTC offerer and the joiner is the initial answerer. These negotiation duties never define transfer direction.
-* A room remains available while at least one authorized peer is connected. It is removed when empty or expired.
+* The base room lifecycle keeps a room available while at least one peer is connected. Empty-room cleanup is immediate: when the last active peer leaves or disconnects, the room is deleted.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Empty
-    Empty --> WaitingForPeer : room:create
+    [*] --> Absent
+    Absent --> WaitingForPeer : room:create
     WaitingForPeer --> Connected : room:join
     Connected --> WaitingForPeer : either peer leaves or disconnects
-    WaitingForPeer --> Empty : remaining peer leaves or room expires
-    Empty --> [*]
+    WaitingForPeer --> Absent : remaining peer leaves or disconnects
+    Absent --> [*]
 ```
 
 ---
@@ -31,7 +31,28 @@ stateDiagram-v2
 3. Production room authorization is independent from the short room ID.
 4. Both members may relay signaling data only to the other active member.
 5. A third connection receives `ROOM_FULL`.
-6. An empty room is deleted immediately. Idle and maximum lifetime rules are enforced by the production backend.
+6. An empty room is always deleted immediately. Production idle and maximum lifetime rules may delete non-empty rooms earlier.
+7. In the Backend POC, one socket may have at most one active Shipri room membership.
+
+### 2.1. Backend POC Lifecycle
+
+`Absent` means no application room record exists. `WaitingForPeer` contains exactly one active peer, and `Connected` contains exactly two active peers.
+
+| Current state | Trigger | Next state | Observable result |
+| :--- | :--- | :--- | :--- |
+| `Absent` | An unaffiliated socket emits valid `room:create`. | `WaitingForPeer` | Create the room and emit `room:created` to the creator with `offerer` duty. |
+| `WaitingForPeer` | A different unaffiliated socket emits valid `room:join`. | `Connected` | Emit `room:joined` with `answerer` duty to the joiner and `peer:joined` to the existing peer. |
+| `Connected` | A third unaffiliated socket emits valid `room:join`. | `Connected` | Reject the joiner with `ROOM_FULL`; room membership does not change. |
+| `Connected` | Either member emits valid `room:leave`. | `WaitingForPeer` | Remove the leaving peer and emit `peer:left` with `reason: "leave"` to the remaining peer. |
+| `Connected` | Either member disconnects. | `WaitingForPeer` | Remove the disconnected peer and emit `peer:left` with `reason: "disconnect"` to the remaining peer. |
+| `WaitingForPeer` | The only member emits valid `room:leave`. | `Absent` | Remove the peer and delete the empty room. No `peer:left` event is emitted because no peer remains. |
+| `WaitingForPeer` | The only member disconnects. | `Absent` | Delete the empty room. No `peer:left` event is emitted because no peer remains. |
+
+After either peer leaves a connected room, the remaining peer becomes the offerer for the next replacement peer. A replacement joins through the same `WaitingForPeer` to `Connected` transition and receives `answerer` duty.
+
+Empty-room cleanup is shared by the Backend POC and production lifecycle: when the last active peer leaves or disconnects, the room is deleted immediately.
+
+The Backend POC does not expire a waiting or connected room by TTL and does not apply rate limits, maximum room counts, or production access tokens. Production may additionally expire waiting or connected rooms through idle TTL, maximum lifetime, and garbage collection rules defined by the backend development plan. Socket.IO automatically removes a disconnected socket from adapter rooms; the backend must still remove its application room membership and notify any remaining peer during disconnect cleanup.
 
 ---
 
@@ -72,11 +93,8 @@ type IceServer = {
   // Optional TURN username. Omitted for Backend POC STUN-only responses.
   username?: string;
 
-  // Optional TURN password or OAuth credential. Omitted in the Backend POC.
+  // Optional TURN password. Omitted in the Backend POC.
   credential?: string;
-
-  // Optional browser ICE credential type.
-  credentialType?: 'password' | 'oauth';
 };
 ```
 
@@ -378,19 +396,19 @@ type RoomErrorCode =
   // Requested room already has two active peers.
   | 'ROOM_FULL'
 
-  // Provided room ID is missing or does not match the canonical format.
+  // Required room ID is missing, is not a string, or does not match the canonical format.
   | 'INVALID_ROOM_ID'
 
-  // Payload is missing required fields or contains invalid field types.
+  // Event payload has an invalid top-level shape or invalid non-room fields.
   | 'INVALID_PAYLOAD'
 
-  // Socket is not authorized to perform the requested room operation.
+  // Socket membership does not permit the requested room operation.
   | 'UNAUTHORIZED'
 
   // Operation requires another active peer, but none is available.
   | 'PEER_UNAVAILABLE'
 
-  // Backend cannot accept the operation because of service limits or load.
+  // Backend cannot complete the operation because a required service or configuration is unavailable.
   | 'SERVER_BUSY';
 
 // Standard error payload for room, membership, validation, and service failures.
@@ -406,15 +424,26 @@ interface RoomErrorPayload {
 }
 ```
 
-Required codes include:
+The Backend POC validates requests in this order and returns the first matching error:
 
-* `ROOM_NOT_FOUND`
-* `ROOM_FULL`
-* `INVALID_ROOM_ID`
-* `INVALID_PAYLOAD`
-* `UNAUTHORIZED`
-* `PEER_UNAVAILABLE`
-* `SERVER_BUSY`
+1. Validate the top-level payload shape and non-room fields.
+2. Validate the required `roomId`.
+3. Verify that the room exists.
+4. Verify that the socket's current membership permits the operation.
+5. Verify room capacity or peer availability.
+6. Verify that the required backend configuration is available.
+
+| Code | POC events | Triggering condition |
+| :--- | :--- | :--- |
+| `INVALID_PAYLOAD` | All client-to-server events | The payload is not a plain object, contains unsupported top-level fields, or has an invalid required field other than `roomId`. For `signal:forward`, this includes a missing or non-object `signalData`. |
+| `INVALID_ROOM_ID` | `room:join`, `room:leave`, `signal:forward`, `ice:get` | `roomId` is missing, is not a string, or does not match `^ship-[a-f0-9]{4}$`. |
+| `ROOM_NOT_FOUND` | `room:join`, `room:leave`, `signal:forward`, `ice:get` | The validated `roomId` has no active in-memory room. |
+| `UNAUTHORIZED` | `room:create`, `room:join`, `room:leave`, `signal:forward`, `ice:get` | A socket that already belongs to a Shipri room tries to create or join another room, or a socket that is not a member of the specified room tries to leave, relay a signal, or fetch ICE configuration. |
+| `ROOM_FULL` | `room:join` | An otherwise eligible socket tries to join a room that already has two active peers. |
+| `PEER_UNAVAILABLE` | `signal:forward` | An active room member tries to relay signaling data while no second peer is present. |
+| `SERVER_BUSY` | `ice:get` | The Backend POC development ICE configuration is missing or invalid, so the server cannot return a usable `iceServers` response. |
+
+An error does not mutate room or socket membership. The server emits `room:error` only to the socket that requested the failed operation. When `roomId` was supplied and passed format validation, the error includes it even if no room exists; otherwise `roomId` is omitted. A disconnected socket cannot receive `room:error`, so disconnect cleanup is defined only by the lifecycle transitions above.
 
 ---
 
@@ -444,8 +473,8 @@ interface Room {
   // Millisecond timestamp when the room was created.
   createdAt: number;
 
-  // Millisecond timestamp when the room expires in production.
-  expiresAt: number;
+  // Production-only millisecond expiry timestamp. Omitted by the Backend POC.
+  expiresAt?: number;
 }
 ```
 
