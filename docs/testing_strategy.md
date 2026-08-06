@@ -46,7 +46,7 @@ We must test that the Signaling Server correctly handles its documented room sta
   * **Error Atomicity**: Verify `room:error` is emitted only to the requesting socket and failed operations do not change room or socket membership.
   * **Repeated Leave**: Verify a repeated leave returns `UNAUTHORIZED` while another peer keeps the room active, or `ROOM_NOT_FOUND` after the final peer's first leave deletes the room.
   * **Signaling Relay**: Relay opaque `signalData` bidirectionally through `signal:forward` and `signal:receive` only between active room members without inspecting or mutating the payload.
-  * **Development ICE**: Emit `ice:get` with `roomId` from an active room member and receive `ice:credentials` with documented STUN-only `iceServers`.
+  * **Development ICE**: Emit `ice:get` with `roomId` from an active room member and receive `ice:credentials` with documented STUN-only `iceServers`; verify the POC response contains no TURN URLs, `username`, `credential`, `credentialType`, `TURN_SHARED_SECRET`, or production secret material.
   * **Sanitization**: Emit `room:join` with malicious payloads (for example SQL injection strings or path traversals as room IDs) and verify the server rejects the input with a stable `room:error` code.
   * **POC Boundaries**: Verify POC tests do not require deferred production behavior such as access tokens, TTL cleanup, rate limits, dynamic TURN credentials, Redis, or persistent storage.
 
