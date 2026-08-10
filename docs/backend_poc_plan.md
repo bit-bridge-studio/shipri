@@ -60,6 +60,32 @@ The initial frontend prototype may rely on the Socket.IO events below. `signalin
 
 All payloads use `roomId` in camelCase. POC signal forwarding must verify that the emitting peer is one of the room's two members and must relay `signalData` without inspecting or mutating it. POC creator/joiner identities are negotiation duties only.
 
+### POC Development ICE Contract
+
+The Backend POC exposes `ice:get` only for active room members. A successful response returns development-only STUN configuration that can be passed directly to `RTCPeerConnection`.
+
+```typescript
+type RoomId = `ship-${string}`; // Must match ship-[a-f0-9]{4}.
+
+interface IceGetPayload {
+  roomId: RoomId;
+}
+
+interface IceCredentialsPayload {
+  roomId: RoomId;
+  iceServers: [
+    {
+      urls: [
+        'stun:stun.l.google.com:19302',
+        'stun:stun1.l.google.com:19302'
+      ];
+    }
+  ];
+}
+```
+
+The POC response must not include TURN URLs, `username`, `credential`, `credentialType`, `TURN_SHARED_SECRET`, or any production secret. Dynamic TURN credentials are deferred to full backend development.
+
 ### POC Room Lifecycle
 
 One socket may belong to at most one active Shipri room. A room with one peer waits for another peer, and a room with two peers is full. If either connected peer leaves or disconnects, the room returns to the one-peer state and the remaining peer becomes the offerer for a future replacement. If the final peer leaves or disconnects, the backend deletes the empty room immediately.

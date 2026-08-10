@@ -28,6 +28,8 @@ STUN servers are stateless and consume virtually zero bandwidth since they only 
 * `stun:stun.l.google.com:19302`
 * `stun:stun1.l.google.com:19302`
 
+The Backend POC uses only these public STUN servers. It does not return TURN URLs, TURN usernames, TURN credentials, or any shared TURN secret.
+
 ### 2.2. TURN Configuration (Self-Hosted via Coturn)
 Since Shipri transfers large files, commercial TURN services can quickly become expensive. We will self-host **Coturn** (the industry-standard open-source TURN server) on a cloud instance with a high bandwidth quota.
 
@@ -40,6 +42,8 @@ Many corporate and public Wi-Fi networks block UDP traffic entirely and restrict
 
 ## 3. Dynamic Authentication (REST API Spec)
 
+Dynamic TURN authentication is a full-backend production extension, not a Backend POC requirement. The POC `ice:get` response is defined in `signaling_protocol_spec.md` and contains STUN-only `iceServers`.
+
 To prevent unauthorized parties from using our TURN server as a free proxy for generic traffic, we implement time-limited TURN REST API credentials compatible with Coturn `use-auth-secret`.
 
 1. **Shared Secret**: The Signaling Server and the Coturn server share a static, long-term secret key (`TURN_SHARED_SECRET`).
@@ -48,15 +52,16 @@ To prevent unauthorized parties from using our TURN server as a free proxy for g
    * **Username**: `timestamp:username_identifier` (e.g., `1785239200:user123`)
    * **Password**: `HMAC-SHA1(TURN_SHARED_SECRET, Username)`
 
-### API Payload Schema
-The client emits a request `ice:get` to the signaling server:
+### Production API Payload Schema
+
+In the full backend production flow, the client emits a request `ice:get` to the signaling server:
 ```json
 {
   "roomId": "ship-83a1"
 }
 ```
 
-The server responds with the `ice:credentials` payload:
+The production server responds with the `ice:credentials` payload including STUN and short-lived TURN entries:
 ```json
 {
   "roomId": "ship-83a1",
