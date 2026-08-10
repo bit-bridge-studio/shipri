@@ -16,14 +16,24 @@ graph TD
 
 ### 1.1. Unit Testing (Fast, Isolated)
 * **Scope**: Math helpers, cryptographic encodings, encrypted board reducers, transfer identity, chunk framing, chunk index calculations, and signaling room limits logic.
-* **Tools**: Vitest is the preferred candidate for this Vite/Node project, but the test infrastructure is not yet installed. Adding it requires explicit dependency approval.
+* **Tools**: Vitest is the active test runner for the Backend POC. Backend tests run once with `vitest run`; watch mode is not part of the committed `test` script.
 * **Key Targets**:
   * Verify AES-GCM encryption and decryption outputs match standard vectors.
   * Verify the incrementing 12-byte IV generator outputs the correct binary array.
   * Verify file slice indexing (making sure offset boundaries do not miss bytes at the end of the file).
 
-### 1.2. Current Test Infrastructure Gap
-The current `client/package.json` and `server/package.json` do not define `test` scripts. Before implementation work that requires tests, the developer must propose a minimal test setup and get approval for any new dependencies.
+### 1.2. Active Backend POC Test Foundation
+The backend test foundation is installed in `server/`:
+
+* Run a clean install with `cd server && npm ci`.
+* Run the complete backend suite with `cd server && npm test`.
+* Vitest discovers the JavaScript test files under `server/test/` without a separate configuration file.
+* `server/test/helpers/socket-client.js` creates isolated `socket.io-client` connections with reconnection disabled and closes them with `socket.disconnect()` during cleanup.
+* The baseline integration test starts a test-only Socket.IO server on an operating-system-assigned port, verifies a client connection, and closes both client and server resources after the test.
+
+Importing the production entry point still starts its listening process. Separating server construction from process startup and running contract tests against that isolated production server are tracked by the next Backend POC ticket.
+
+The frontend does not yet define a `test` script. Its test setup remains subject to the dependency approval required by the frontend prototype test-foundation ticket.
 
 ---
 
