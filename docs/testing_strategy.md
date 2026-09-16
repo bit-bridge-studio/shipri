@@ -25,6 +25,7 @@ graph TD
 ### 1.2. Active Backend POC Test Foundation
 The backend test foundation is installed in `server/`:
 
+* Use Node.js `^20.19.0 || ^22.12.0 || >=24.0.0`, matching the supported runtime intersection of Vitest and its Vite dependency.
 * Run a clean install with `cd server && npm ci`.
 * Run the complete backend suite with `cd server && npm test`.
 * Vitest discovers the JavaScript test files under `server/test/` without a separate configuration file.
