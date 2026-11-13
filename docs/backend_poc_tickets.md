@@ -184,7 +184,9 @@ When a peer disconnects unexpectedly, I want room state and peer notifications t
 - The remaining peer becomes the next `offerer` for a future replacement peer.
 - The room is removed immediately when the final peer disconnects.
 - Disconnected sockets are removed from the Socket.IO room.
-- Integration tests verify cleanup, notifications for both peer positions, replacement join after disconnect, and empty-room cleanup.
+- Disconnect cleanup resolves membership through a reverse socket-to-room index and does not scan unrelated entries in `activeRooms`.
+- Successful create, join, leave, disconnect, and room-deletion transitions keep the reverse index consistent with room state; rejected operations leave both unchanged.
+- Integration tests verify cleanup, notifications for both peer positions, replacement join after disconnect, empty-room cleanup, reverse-index consistency, and isolation from unrelated active rooms.
 
 ---
 
@@ -226,6 +228,7 @@ When the POC is ready for remote testing, I want a dedicated restricted staging 
 ## Acceptance Criteria
 
 - The staging hostname, approved origins, required ports, and access restrictions are documented.
+- The staging reverse-proxy topology (standalone Caddy or the host's external `nginx-proxy` network) is explicitly documented so staging does not collide on host ports `80/443`.
 - The staging environment uses no production secrets or production traffic.
 - Required DNS and server prerequisites are documented.
 - The environment clearly identifies itself as POC staging.
@@ -244,7 +247,7 @@ When I deploy the Backend POC, I want reproducible server and reverse-proxy conf
 ## Acceptance Criteria
 
 - The Backend POC can be built and started on the staging server using documented commands.
-- Caddy terminates HTTPS and proxies `/health` and Socket.IO WSS traffic to the signaling server.
+- The configured reverse proxy (Caddy or external `nginx-proxy`) terminates HTTPS and proxies `/health` and Socket.IO WSS traffic to the signaling server without host port conflicts.
 - CORS permits only approved local and staging origins.
 - TURN and production secrets are absent from the POC staging configuration.
 - Configuration validation and deployment smoke checks are documented.
