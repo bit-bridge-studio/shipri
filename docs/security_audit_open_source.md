@@ -72,6 +72,7 @@ The signaling server handles active WebSocket rooms in-memory. In a public, open
 * **Mitigation**:
   * The server enforces a capacity limit of exactly 2.
   * On `room:join`, the server verifies that the authorized room has fewer than two active peers. A third connection is rejected.
+  * On `signal:forward`, the server validates the payload envelope and canonical `roomId`, verifies the room exists (`ROOM_NOT_FOUND`), confirms the sender socket is an active member via `socketRooms` and `room.peers` (`UNAUTHORIZED`), requires a second active peer (`PEER_UNAVAILABLE`), and relays `{ roomId, peerId, signalData }` via `io.to(targetPeer.socketId)` to only the other active peer without inspecting, logging, or mutating `signalData`.
   * Regular expressions must validate `roomId` format to prevent malformed socket channel names and injection-style payloads: `/^ship-[a-f0-9]{4}$/`.
 
 ---
