@@ -3,16 +3,12 @@ import cors from 'cors';
 import express from 'express';
 import { Server } from 'socket.io';
 import { resolveServerConfig } from './config.js';
-
-// Generate a random ID with prefix ship-XXXX (4-character hex)
-function generateRoomId() {
-  const characters = '0123456789abcdef';
-  let rand = '';
-  for (let i = 0; i < 4; i++) {
-    rand += characters.charAt(Math.floor(Math.random() * characters.length));
-  }
-  return `ship-${rand}`;
-}
+import {
+  allocateUniqueRoomId,
+  createRoomError,
+  validateRoomJoinPayload,
+  validateSignalForwardPayload,
+} from './room-id.js';
 
 export function createSignalingServer(options = {}) {
   const config = resolveServerConfig(options);
@@ -50,11 +46,7 @@ export function createSignalingServer(options = {}) {
 
     // 1. Host creates room
     socket.on('room:create', () => {
-      let roomId = generateRoomId();
-      // Ensure uniqueness
-      while (activeRooms.has(roomId)) {
-        roomId = generateRoomId();
-      }
+      const roomId = allocateUniqueRoomId(activeRooms);
 
       const room = {
         roomId,
@@ -71,22 +63,38 @@ export function createSignalingServer(options = {}) {
     });
 
     // 2. Receiver joins room
-    socket.on('room:join', ({ roomId }) => {
-      if (!roomId) {
-        socket.emit('room:error', { code: 'INVALID_ROOM_ID', message: 'Room ID is required.' });
+    socket.on('room:join', (payload) => {
+      const validation = validateRoomJoinPayload(payload);
+      if (!validation.ok) {
+        socket.emit('room:error', validation.error);
         return;
       }
 
+      const { roomId } = validation;
       const room = activeRooms.get(roomId);
 
       if (!room) {
-        socket.emit('room:error', { code: 'ROOM_NOT_FOUND', message: 'Room does not exist or has expired.' });
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'ROOM_NOT_FOUND',
+            'Room does not exist or has expired.',
+            roomId,
+          ),
+        );
         return;
       }
 
       // Check if room is already full
       if (room.receiverSocketId && room.receiverSocketId !== socket.id) {
-        socket.emit('room:error', { code: 'ROOM_FULL', message: 'This room is already occupied.' });
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'ROOM_FULL',
+            'This room is already occupied.',
+            roomId,
+          ),
+        );
         return;
       }
 
@@ -102,9 +110,22 @@ export function createSignalingServer(options = {}) {
     });
 
     // 3. Forward WebRTC signaling candidates/SDP
-    socket.on('signal:forward', ({ roomId, signalData }) => {
+    socket.on('signal:forward', (payload) => {
+      const validation = validateSignalForwardPayload(payload);
+      if (!validation.ok) {
+        socket.emit('room:error', validation.error);
+        return;
+      }
+
+      const { roomId, signalData } = validation;
       const room = activeRooms.get(roomId);
-      if (!room) return;
+      if (!room) {
+        socket.emit(
+          'room:error',
+          createRoomError('ROOM_NOT_FOUND', 'Room not found.', roomId),
+        );
+        return;
+      }
 
       // Relays the message to the other socket in the room
       const targetSocketId = socket.id === room.hostSocketId ? room.receiverSocketId : room.hostSocketId;

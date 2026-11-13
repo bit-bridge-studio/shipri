@@ -27,7 +27,7 @@ stateDiagram-v2
 ## 2. Room Rules
 
 1. Room capacity is exactly two active connections.
-2. Room IDs use `ship-[a-f0-9]{4}` and cryptographically secure generation.
+2. Room IDs use `ship-[a-f0-9]{4}`, generated via Node.js `crypto.randomBytes(2)` and verified unique against active rooms before allocation.
 3. Production room authorization is independent from the short room ID.
 4. Both members may relay signaling data only to the other active member.
 5. A third connection receives `ROOM_FULL`.
