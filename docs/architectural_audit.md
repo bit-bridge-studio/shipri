@@ -41,6 +41,16 @@ Finding dispositions:
   * Production authorization is already required to be independent from the public room ID and must be validated before assigning the second peer slot.
   * The short POC identifier remains canonical until a separate contract decision changes it; increasing its length is not a substitute for authorization.
 
+### 1.3. Production Room Authorization vs. Untrusted Signaling Boundary — Accepted
+* **Location / Component**: Room Authorization & Key Distribution (`docs/security_e2ee_spec.md` / `docs/signaling_protocol_spec.md` / `docs/backend_development_plan.md`)
+* **Finding**: Full backend development requires room authorization independent from the 65,536-value `roomId`, while the threat model deems the signaling server untrusted and keeps the URL fragment `#key=...` strictly client-side. Placing a join token in the URL path or query string would leak it to HTTP proxy logs and Referer headers, whereas sending the master secret to the server would break Zero-Knowledge E2EE.
+* **Risk**: Either authorization tokens leak in URLs/logs or room authorization couples with E2EE key material.
+* **Decision**:
+  * Keep only the single 256-bit master secret in the URL fragment (`#key=...`) or derive an explicit HKDF domain token (`shipri-room-auth-v1`) on the client that is mathematically independent from the E2EE encryption keys (`shipri-board-metadata-v1`, `shipri-control-v1`, and chunk keys).
+  * The creating peer registers the room authorization verifier with `room:create` (or receives a server-issued capability bound to the room), and the joining peer presents the derived room authorization token in the `room:join` Socket.IO payload.
+  * Because HKDF is one-way, the signaling server can verify room authorization before assigning the second peer slot without ever learning the master secret or decrypting P2P traffic.
+* **Owner**: Full backend contract ticket 1 (GitHub issue #53), security ticket 3 (GitHub issue #55), and final frontend ticket 16 (GitHub issue #35).
+
 ---
 
 ## 2. End-to-End Encryption (E2EE) & Web Worker Constraints
@@ -71,9 +81,30 @@ Finding dispositions:
 * **Risk**: AES-GCM nonce reuse with the same key breaks the required confidentiality and integrity guarantees.
 * **Decision**:
   * Derive each chunk key from an unambiguous context containing `roomId`, `transferId`, a protocol-stable owner-to-downloader direction, and `epoch`.
+  * Define direction using stable P2P transfer identities (such as the file owner's persistent room-session peer/member identity and `transferId`) rather than ephemeral Socket.IO `socket.id` values or `offerer`/`answerer` negotiation duties, which can flip across reconnects.
   * Construct IVs deterministically from the chunk index only within that unique key domain.
   * Rotate the epoch before a resumed transfer reuses a chunk index under a new transfer attempt.
 * **Owner**: Final frontend architecture ticket 14, encrypted framing ticket 20, and synchronized security/P2P schemas.
+
+### 2.4. Fragment Key Cleanup vs. Page Reload Reconnection — Accepted
+* **Location / Component**: URL Fragment Key Lifecycle (`docs/security_e2ee_spec.md` / `docs/ui_ux_flow_spec.md`)
+* **Finding**: The joining peer immediately strips `#key=...` from the address bar via `window.history.replaceState` to prevent history and shoulder-surfing leakage. However, if either peer reloads the tab (F5) or recovers from a transient navigation while remaining in the room, an in-memory-only key is lost and the peer can no longer decrypt the shared board or resume transfers.
+* **Risk**: Broken reconnection UX after a page reload or accidental re-exposure of the key in the visible URL.
+* **Decision**:
+  * Immediately strip `#key=...` from the visible URL with `window.history.replaceState`.
+  * Cache the room master secret in tab-scoped `sessionStorage` keyed by `roomId` for the lifetime of the active room session so same-tab reloads can recover E2EE state.
+  * Explicitly wipe the `sessionStorage` entry on intentional `room:leave`, terminal room error, or session reset.
+* **Owner**: Final frontend tickets 17 (GitHub issue #36) and 29 (GitHub issue #48).
+
+### 2.5. Canonical Schema Alignment for Control Envelope and `FILE_ADVERTISE` — Accepted
+* **Location / Component**: P2P Control Channel & Metadata Schemas (`docs/security_e2ee_spec.md` / `docs/p2p_data_protocol_spec.md`)
+* **Finding**: `security_e2ee_spec.md` illustrates `FILE_ADVERTISE` with top-level `{ fileId, iv, ciphertext }` in standard Base64, whereas `p2p_data_protocol_spec.md` nests `{ fileId, encryptedMetadata: { iv, ciphertext } }` in `base64url` and shows control messages as plaintext JSON despite defining the `shipri-control-v1` AES-GCM key.
+* **Risk**: Incompatible codec implementations and unauthenticated control frames on `shipri-control`.
+* **Decision**:
+  * Standardize all binary-to-text fields in JSON schemas on `base64url` without padding.
+  * Define one canonical authenticated `shipri-control-v1` AEAD envelope (with unique 12-byte IV and room/session context) or canonical nested `encryptedMetadata` schema across both documents before implementation.
+  * Specify the exact binary header layout (`transferId`, `fileId`, `epoch`, `chunkIndex`) on `shipri-binary` and pass that header as AES-GCM `additionalData` (AAD) so header fields are cryptographically authenticated alongside each chunk.
+* **Owner**: Final frontend tickets 14, 18, 19, and 20 (GitHub issues #33, #37, #38, and #39).
 
 ---
 
@@ -119,7 +150,8 @@ Finding dispositions:
   * Continue enforcing `RTCDataChannel.bufferedAmount` high/low watermarks independently from application credit.
   * Never assume relative ordering between the control and binary data channels. An over-credit binary frame fails the affected transfer safely.
   * Keep user-requested `TRANSFER_PAUSE` and `TRANSFER_RESUME` independent from receiver flow credit.
-* **Owner**: Final frontend architecture ticket 14, control codec ticket 19, and transfer tickets 25–26.
+  * Define concurrency semantics for one active transfer per direction: while a transfer in a given direction is active or paused, additional download requests in that same direction are either rejected with a deterministic `BUSY` reason or explicitly queued in the UI without interleaving uncredited frames.
+* **Owner**: Final frontend architecture ticket 14, control codec ticket 19, and transfer tickets 24–27.
 
 ---
 
@@ -136,9 +168,33 @@ Finding dispositions:
   * Show accurate capability and size guidance before a transfer begins.
 * **Owner**: Frontend browser-capability ticket 30 or a separately approved persistence-extension ticket.
 
+### 5.2. Transient User Activation Before `showSaveFilePicker()` — Accepted
+* **Location / Component**: Download Request Lifecycle (`docs/p2p_data_protocol_spec.md` / `docs/ui_ux_flow_spec.md`)
+* **Finding**: Browser File System Access API (`window.showSaveFilePicker()`) requires transient user activation from the user's click event. Running asynchronous work (such as `await navigator.storage.estimate()` or network round-trips) before invoking `showSaveFilePicker()` can expire user activation and throw `SecurityError`.
+* **Risk**: Save dialog fails to open when clicking `Download` on a remote file card.
+* **Decision**:
+  * Evaluate browser capability and pre-compute or cache storage estimates when remote file advertisements arrive on the board, not asynchronously inside the click handler before opening the file picker.
+  * Invoke `window.showSaveFilePicker()` synchronously within the user click gesture before awaiting any asynchronous persistence setup or sending `DOWNLOAD_REQUEST`.
+* **Owner**: Final frontend tickets 24 and 30 (GitHub issues #43 and #49).
+
 ---
 
-## 6. Primary References
+## 6. Deployment & Reverse-Proxy Topology Alignment
+
+### 6.1. External Reverse Proxy (`nginx-proxy`) vs. Bundled Caddy — Accepted
+* **Location / Component**: Deployment Architecture (`docker-compose.yml` / `docker-compose.prod.yml` / `docs/deployment_docker_spec.md`)
+* **Finding**: The specification documents a bundled Caddy `reverse-proxy` container binding host ports `80` and `443`, whereas the active CI/CD pipeline (`docker-compose.prod.yml` and `.github/workflows/deploy.yml`) deploys to a VPS that already runs an external `nginx-proxy` network. Starting a second proxy on ports `80/443` on that host would fail with a port conflict.
+* **Risk**: Staging and production deployments fail or diverge from documented reverse-proxy assumptions.
+* **Decision**:
+  * Support two explicitly documented deployment modes:
+    1. **Self-contained stack (`docker-compose.yml`)**: bundled Caddy reverse proxy owning `80/443` for standalone VPS or local deployments.
+    2. **External proxy integration (`docker-compose.prod.yml`)**: `client` and `server` attached to the external reverse-proxy network (`nginx-proxy`) or dedicated staging proxy, with HTTPS/WSS termination and `/socket.io/*` + `/health` routing configured on the host proxy.
+  * Align Backend POC staging tickets (15–18) and full backend deployment ticket (GitHub issue #58) with the active VPS proxy topology so `/health` and WSS routing work without host port collisions.
+* **Owner**: Backend POC tickets 15–18 (GitHub issues #15–#18) and full backend ticket 6 (GitHub issue #58).
+
+---
+
+## 7. Primary References
 
 * [RFC 5869: HKDF](https://www.rfc-editor.org/rfc/rfc5869.html)
 * [RFC 8829: JavaScript Session Establishment Protocol](https://www.rfc-editor.org/rfc/rfc8829.html)
