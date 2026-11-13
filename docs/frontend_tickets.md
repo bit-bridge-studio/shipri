@@ -104,9 +104,14 @@ When two prototype peers connect, I want deterministic offer/answer and bidirect
 ## Acceptance Criteria
 
 - The documented offerer creates the initial connection and the answerer responds.
-- Both peers forward and apply ICE candidates.
-- Connection and signaling states are visible and tested.
-- Documentation states that negotiation duty never restricts application messages.
+- SDP offers and answers are forwarded after `setLocalDescription()` without waiting for ICE gathering to complete.
+- Both peers trickle ICE candidates as they are produced.
+- Candidates received before the matching remote description are queued and applied after `setRemoteDescription()` succeeds.
+- The five-second ICE gathering bound surfaces stalled-gathering diagnostics and never delays an otherwise valid initial offer or answer.
+- `peer:left` closes the current peer connection, invalidates its negotiation generation, and a later `peer:joined` starts a fresh negotiation.
+- Inbound SDP and candidates are accepted only for the current remote `peerId` and ICE generation; late events from replaced negotiations are ignored.
+- Connection and signaling states are visible, and unit tests cover delayed ICE gathering, early remote candidates, peer departure during negotiation, stale events, and replacement negotiation.
+- Documentation defines trickle ICE behavior and states that negotiation duty never restricts application messages.
 
 ---
 
@@ -181,6 +186,13 @@ When final frontend work begins, I want the shared file-board and transfer contr
 
 - State machines cover room membership, board synchronization, file availability, and independent transfer sessions.
 - Control messages, binary framing, authorization, flow control, resume epochs, and browser limits are documented.
+- The execution model keeps `RTCPeerConnection` on the main thread and defines the supported `RTCDataChannel`, encryption, and persistence worker boundaries.
+- Buffer ownership and transferable `ArrayBuffer` handoffs are documented together with a tested main-thread `RTCDataChannel` compatibility path.
+- Worker-owned `RTCDataChannel` is treated as an optional optimization until the supported browser matrix verifies it.
+- Receiver flow control uses cumulative `FLOW_CREDIT.maxPlaintextOffsetExclusive` limits and defines numeric limits for queued, granted, and in-flight bytes.
+- Each `FLOW_CREDIT` message binds to the transfer, direction, and epoch and carries a monotonic `sequence`, so duplicate, stale, and reordered updates never expand the sender window.
+- The receiver queue protocol replaces `FLOW_PAUSE` and `FLOW_RESUME` with `FLOW_CREDIT`; user-requested `TRANSFER_PAUSE` and `TRANSFER_RESUME` remain independent controls.
+- Cross-channel ordering between control and binary channels is never assumed; credit, cancellation, and epoch messages fail safely when stale or reordered.
 - Backend boundaries explicitly exclude board and transfer state.
 - Security, P2P, UX, testing, and frontend plan documents are synchronized.
 
@@ -194,7 +206,9 @@ The frontend extracts production-safe signaling and WebRTC modules without diagn
 
 - Modules consume equal-peer room, authorization, ICE, and negotiation contracts.
 - Prototype logs and diagnostic controls are excluded from production routes.
-- Unit tests cover initialization, cleanup, reconnect hooks, and error propagation.
+- Disposing a connection closes its data channels and `RTCPeerConnection`, cancels pending timers and negotiations, removes subscriptions, and clears retained references.
+- Reconnect hooks create a new connection generation and reject late events from disposed generations.
+- Unit tests cover initialization, cleanup, repeated replacement-peer cycles, stale events, reconnect hooks, and error propagation.
 
 ---
 
@@ -243,7 +257,8 @@ When peers request and control downloads, I want every control message validated
 
 ## Acceptance Criteria
 
-- A documented codec handles file advertise/remove, download request/accept/reject, flow control, pause/resume, cancel, completion, error, and resume messages.
+- A documented codec handles file advertise/remove, download request/accept/reject, cumulative `FLOW_CREDIT`, transfer pause/resume, cancel, completion, error, and resume messages.
+- `FLOW_CREDIT` carries `maxPlaintextOffsetExclusive`, binds to transfer, direction, and epoch, and uses a monotonic `sequence` so duplicate, stale, and reordered updates do not expand the sender window.
 - Messages bind to room, file, transfer, direction, and epoch where applicable.
 - Unknown, stale, forged, cross-transfer, and malformed messages fail closed.
 - Unit tests and protocol/security documentation are updated.
@@ -257,9 +272,11 @@ When either peer owns a requested file, I want chunks framed and encrypted witho
 ## Acceptance Criteria
 
 - Binary frames identify transfer, file, epoch, and chunk index.
-- Per-transfer epoch keys and deterministic IVs never reuse a key/IV pair.
+- An unambiguous HKDF context schema binds chunk keys to the room, transfer, direction, and epoch.
+- Per-transfer epoch keys and deterministic IVs never reuse a key/IV pair, including when separate transfers use the same chunk index.
 - Invalid headers, tags, directions, epochs, or chunk order fail closed.
-- Unit tests cover framing, round trips, tampering, boundaries, and epoch separation.
+- Unit tests cover framing, round trips, tampering, boundaries, simultaneous transfers, repeated chunk indexes across transfers, and epoch separation.
+- The key-derivation and IV construction schemas are synchronized across the security and P2P protocol documentation.
 
 ---
 
@@ -323,9 +340,11 @@ When a peer accepts a download request, I want the local file streamed with boun
 ## Acceptance Criteria
 
 - The owner slices, encrypts, frames, and sends sequential chunks for the requested transfer.
+- The owner sends a chunk only when its ending plaintext offset is less than or equal to the downloader's latest valid `maxPlaintextOffsetExclusive`.
 - `bufferedAmount` high/low watermarks stop and resume reads.
+- Receiver credits and `bufferedAmount` limits are enforced independently.
 - Missing or changed local files fail only the affected transfer.
-- Unit tests cover boundaries, backpressure, cancellation, completion, and read/encryption failure.
+- Unit tests cover boundaries, exhausted credits, delayed credit messages, backpressure, cancellation, completion, and read/encryption failure.
 
 ---
 
@@ -335,11 +354,13 @@ When I download a remote file, I want encrypted chunks written to disk without a
 
 ## Acceptance Criteria
 
-- A byte-bounded decrypt/write queue applies `FLOW_PAUSE` and `FLOW_RESUME`.
+- A byte-bounded decrypt/write queue grants an initial `maxPlaintextOffsetExclusive` only after persistence is ready and advances it from the last persisted plaintext offset.
+- The documented queue and in-flight byte limits remain bounded when persistence is slower than network delivery.
 - Valid chunks are written in order through File System Access API for the MVP path.
-- Invalid, duplicate, cross-transfer, or out-of-order frames fail safely.
+- Duplicate, stale, or reordered credit messages are ignored without expanding the sender window.
+- Invalid, duplicate, cross-transfer, out-of-order, or over-credit binary frames fail the affected transfer safely.
 - Completion closes the target only after all chunks are persisted.
-- Unit tests cover queue watermarks, writes, cancellation, completion, and failures.
+- Unit tests cover queue watermarks, slow persistence, maximum in-flight bytes, delayed control messages, writes, cancellation, completion, and failures.
 
 ---
 
@@ -376,9 +397,11 @@ When connectivity returns, I want board state restored and eligible transfers re
 ## Acceptance Criteria
 
 - Reconnection attempts are bounded and WebRTC renegotiation follows the frozen contract.
+- The previous data channels, peer connection, listeners, timers, and negotiation generation are disposed before replacement negotiation starts.
+- Late events from the disposed connection cannot mutate current room, board, or transfer state.
 - Board state converges after reconnect.
 - Resume authenticates transfer state, uses the last persisted chunk, and rotates epoch keys.
-- Unit tests cover reconnect success/exhaustion, stale resume, duplicate chunks, and output integrity.
+- Unit tests cover reconnect success/exhaustion, repeated replacement cycles, stale connection events, stale resume, duplicate chunks, and output integrity.
 
 ---
 
