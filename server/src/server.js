@@ -37,8 +37,12 @@ export function createSignalingServer(options = {}) {
   // Memory schema: Map<roomId, { roomId, hostSocketId, receiverSocketId, createdAt }>
   const activeRooms = new Map();
 
-  app.get('/health', (req, res) => {
-    res.json({ status: 'ok', roomsCount: activeRooms.size });
+  app.get('/health', (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({
+      status: 'ok',
+      roomsCount: activeRooms.size,
+    });
   });
 
   io.on('connection', (socket) => {
