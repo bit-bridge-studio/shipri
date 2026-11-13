@@ -6,9 +6,25 @@ import { resolveServerConfig } from './config.js';
 import {
   allocateUniqueRoomId,
   createRoomError,
+  generatePeerId,
+  validateRoomCreatePayload,
   validateRoomJoinPayload,
   validateSignalForwardPayload,
 } from './room-id.js';
+
+function hasActiveRoomMembership(activeRooms, socketId) {
+  for (const room of activeRooms.values()) {
+    if (
+      room.hostSocketId === socketId ||
+      room.receiverSocketId === socketId ||
+      room.peers?.some((peer) => peer.socketId === socketId)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 export function createSignalingServer(options = {}) {
   const config = resolveServerConfig(options);
@@ -30,7 +46,7 @@ export function createSignalingServer(options = {}) {
     },
   });
 
-  // Memory schema: Map<roomId, { roomId, hostSocketId, receiverSocketId, createdAt }>
+  // Memory schema: Map<roomId, { roomId, peers, createdAt }>
   const activeRooms = new Map();
 
   app.get('/health', (_req, res) => {
@@ -44,22 +60,50 @@ export function createSignalingServer(options = {}) {
   io.on('connection', (socket) => {
     console.log(`Socket connected: ${socket.id}`);
 
-    // 1. Host creates room
-    socket.on('room:create', () => {
+    // 1. First peer creates room
+    socket.on('room:create', (payload) => {
+      const validation = validateRoomCreatePayload(payload);
+      if (!validation.ok) {
+        socket.emit('room:error', validation.error);
+        return;
+      }
+
+      if (hasActiveRoomMembership(activeRooms, socket.id)) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'UNAUTHORIZED',
+            'Socket already belongs to an active room.',
+          ),
+        );
+        return;
+      }
+
       const roomId = allocateUniqueRoomId(activeRooms);
+      const peerId = generatePeerId();
+      const now = Date.now();
 
       const room = {
         roomId,
-        hostSocketId: socket.id,
-        receiverSocketId: null,
-        createdAt: Date.now(),
+        peers: [
+          {
+            peerId,
+            socketId: socket.id,
+            joinedAt: now,
+          },
+        ],
+        createdAt: now,
       };
 
       activeRooms.set(roomId, room);
       socket.join(roomId);
 
-      console.log(`Room created: ${roomId} by host ${socket.id}`);
-      socket.emit('room:created', { roomId, socketId: socket.id });
+      console.log(`Room created: ${roomId}`);
+      socket.emit('room:created', {
+        roomId,
+        peerId,
+        negotiationDuty: 'offerer',
+      });
     });
 
     // 2. Receiver joins room
@@ -140,7 +184,7 @@ export function createSignalingServer(options = {}) {
 
       // Find rooms where this socket was host or receiver
       for (const [roomId, room] of activeRooms.entries()) {
-        if (room.hostSocketId === socket.id) {
+        if (room.hostSocketId === socket.id || room.peers?.[0]?.socketId === socket.id) {
           console.log(`Host disconnected. Closing room: ${roomId}`);
           if (room.receiverSocketId) {
             io.to(room.receiverSocketId).emit('room:error', {
