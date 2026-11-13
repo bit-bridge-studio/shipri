@@ -184,8 +184,8 @@ When final frontend work begins, I want the shared file-board and transfer contr
 
 ## Acceptance Criteria
 
-- State machines cover room membership, board synchronization, file availability, and independent transfer sessions.
-- Control messages, binary framing, authorization, flow control, resume epochs, and browser limits are documented.
+- State machines cover room membership, board synchronization, file availability, and independent transfer sessions, including explicit behavior when a second download is requested in a direction that already has an active or paused transfer.
+- Control messages, binary framing, authorization, flow control, resume epochs, and browser limits are documented, with a single canonical `base64url` schema for `FILE_ADVERTISE` and an authenticated AEAD envelope for `shipri-control-v1` messages across `security_e2ee_spec.md` and `p2p_data_protocol_spec.md`.
 - The execution model keeps `RTCPeerConnection` on the main thread and defines the supported `RTCDataChannel`, encryption, and persistence worker boundaries.
 - Buffer ownership and transferable `ArrayBuffer` handoffs are documented together with a tested main-thread `RTCDataChannel` compatibility path.
 - Worker-owned `RTCDataChannel` is treated as an optional optimization until the supported browser matrix verifies it.
@@ -218,8 +218,8 @@ When either peer creates or joins a production room, I want room authorization h
 
 ## Acceptance Criteria
 
-- Authorization tokens are received, stored only as required, attached to authorized Socket.IO actions, and cleared on leave.
-- Share-link construction carries only the documented join authorization and fragment key.
+- Authorization tokens are derived or received according to the frozen contract (cryptographically separated from E2EE keys), attached to authorized Socket.IO actions, and cleared on leave.
+- Share-link construction keeps secrets strictly in the URL fragment (`#key=...`) and never leaks authorization tokens in URL path or query parameters.
 - Invalid or expired authorization fails safely without logging tokens.
 - Unit tests and security/signaling documentation are updated.
 
@@ -232,7 +232,8 @@ When peers share a room link, I want the master key generated, encoded, extracte
 ## Acceptance Criteria
 
 - The creating peer generates a 256-bit key and places its URL-safe encoding only in the fragment.
-- The joining peer extracts and immediately removes the fragment.
+- The joining peer extracts and immediately removes the fragment with `window.history.replaceState`.
+- The room master key is cached in tab-scoped `sessionStorage` keyed by `roomId` for same-tab reload recovery and is explicitly wiped on intentional `room:leave`, terminal room error, or session reset.
 - Missing or malformed keys fail safely and key material never enters requests or logs.
 - Unit tests and security documentation are updated.
 
@@ -271,8 +272,8 @@ When either peer owns a requested file, I want chunks framed and encrypted witho
 
 ## Acceptance Criteria
 
-- Binary frames identify transfer, file, epoch, and chunk index.
-- An unambiguous HKDF context schema binds chunk keys to the room, transfer, direction, and epoch.
+- Binary frames identify transfer, file, epoch, and chunk index with a deterministic binary header passed as AES-GCM `additionalData` (AAD).
+- An unambiguous HKDF context schema binds chunk keys to the room, transfer, protocol-stable direction (independent of ephemeral `socket.id` or `offerer`/`answerer` roles), and epoch.
 - Per-transfer epoch keys and deterministic IVs never reuse a key/IV pair, including when separate transfers use the same chunk index.
 - Invalid headers, tags, directions, epochs, or chunk order fail closed.
 - Unit tests cover framing, round trips, tampering, boundaries, simultaneous transfers, repeated chunk indexes across transfers, and epoch separation.
@@ -325,11 +326,11 @@ When I click a remote file, I want the save path prepared before requesting byte
 
 ## Acceptance Criteria
 
-- Capability and size limits are checked before the request.
+- Capability and storage-estimate checks are pre-evaluated when advertisements arrive so `window.showSaveFilePicker()` is invoked synchronously within the user's click gesture without losing transient user activation.
 - Cancelling the save dialog sends no download request.
 - A random transfer ID is created only after persistence is ready.
 - Owners accept available files and reject missing, removed, busy, or invalid requests.
-- Unit tests cover request, acceptance, rejection, cancellation, and duplicate requests.
+- Unit tests cover request, acceptance, rejection, cancellation, user-gesture preservation, and duplicate requests.
 
 ---
 
