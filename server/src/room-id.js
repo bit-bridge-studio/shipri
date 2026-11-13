@@ -94,14 +94,11 @@ export function validateRoomCreatePayload(payload) {
   return { ok: true };
 }
 
-/**
- * Validates the `room:join` payload according to protocol error precedence.
- */
-export function validateRoomJoinPayload(payload) {
+function validateRoomIdEnvelope(payload, invalidMessage) {
   const envelope = validatePayloadEnvelope(
     payload,
     ['roomId'],
-    'Invalid room:join payload.',
+    invalidMessage,
   );
   if (!envelope.ok) {
     return envelope;
@@ -115,6 +112,20 @@ export function validateRoomJoinPayload(payload) {
   }
 
   return { ok: true, roomId: payload.roomId };
+}
+
+/**
+ * Validates the `room:join` payload according to protocol error precedence.
+ */
+export function validateRoomJoinPayload(payload) {
+  return validateRoomIdEnvelope(payload, 'Invalid room:join payload.');
+}
+
+/**
+ * Validates the `room:leave` payload according to protocol error precedence.
+ */
+export function validateRoomLeavePayload(payload) {
+  return validateRoomIdEnvelope(payload, 'Invalid room:leave payload.');
 }
 
 /**
