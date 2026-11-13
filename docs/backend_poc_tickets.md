@@ -184,7 +184,9 @@ When a peer disconnects unexpectedly, I want room state and peer notifications t
 - The remaining peer becomes the next `offerer` for a future replacement peer.
 - The room is removed immediately when the final peer disconnects.
 - Disconnected sockets are removed from the Socket.IO room.
-- Integration tests verify cleanup, notifications for both peer positions, replacement join after disconnect, and empty-room cleanup.
+- Disconnect cleanup resolves membership through a reverse socket-to-room index and does not scan unrelated entries in `activeRooms`.
+- Successful create, join, leave, disconnect, and room-deletion transitions keep the reverse index consistent with room state; rejected operations leave both unchanged.
+- Integration tests verify cleanup, notifications for both peer positions, replacement join after disconnect, empty-room cleanup, reverse-index consistency, and isolation from unrelated active rooms.
 
 ---
 
