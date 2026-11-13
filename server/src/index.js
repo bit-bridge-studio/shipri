@@ -1,11 +1,12 @@
 import dotenv from 'dotenv';
+import { loadConfig } from './config.js';
 import { createSignalingServer } from './server.js';
 
 dotenv.config();
 
-const PORT = process.env.PORT || 5001;
-const { httpServer } = createSignalingServer();
+const config = loadConfig();
+const { httpServer } = createSignalingServer(config);
 
-httpServer.listen(PORT, () => {
-  console.log(`Signaling server listening on port ${PORT}`);
+httpServer.listen(config.port, () => {
+  console.log(`Signaling server listening on port ${config.port}`);
 });

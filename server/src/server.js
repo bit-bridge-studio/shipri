@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import cors from 'cors';
 import express from 'express';
 import { Server } from 'socket.io';
+import { resolveServerConfig } from './config.js';
 
 // Generate a random ID with prefix ship-XXXX (4-character hex)
 function generateRoomId() {
@@ -13,15 +14,22 @@ function generateRoomId() {
   return `ship-${rand}`;
 }
 
-export function createSignalingServer() {
+export function createSignalingServer(options = {}) {
+  const config = resolveServerConfig(options);
+
   const app = express();
-  app.use(cors());
+  app.use(
+    cors({
+      origin: config.allowedOrigins,
+      methods: ['GET', 'POST'],
+    }),
+  );
   app.use(express.json());
 
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: {
-      origin: '*', // In production, restrict to allowed origins
+      origin: config.allowedOrigins,
       methods: ['GET', 'POST'],
     },
   });
@@ -150,6 +158,7 @@ export function createSignalingServer() {
     app,
     httpServer,
     io,
+    config,
     close,
   };
 }
