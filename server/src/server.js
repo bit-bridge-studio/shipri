@@ -285,16 +285,49 @@ export function createSignalingServer(options = {}) {
       if (!room) {
         socket.emit(
           'room:error',
-          createRoomError('ROOM_NOT_FOUND', 'Room not found.', roomId),
+          createRoomError(
+            'ROOM_NOT_FOUND',
+            'Room does not exist or has expired.',
+            roomId,
+          ),
         );
         return;
       }
 
-      // Relays the message to the other socket in the room
-      const targetPeer = room.peers.find((peer) => peer.socketId !== socket.id);
-      if (targetPeer) {
-        io.to(targetPeer.socketId).emit('signal:receive', { signalData });
+      const senderPeer =
+        socketRooms.get(socket.id) === roomId
+          ? room.peers.find((peer) => peer.socketId === socket.id)
+          : null;
+      if (!senderPeer) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'UNAUTHORIZED',
+            'Socket is not a member of this room.',
+            roomId,
+          ),
+        );
+        return;
       }
+
+      const targetPeer = room.peers.find((peer) => peer.socketId !== socket.id);
+      if (!targetPeer) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'PEER_UNAVAILABLE',
+            'No second peer is connected to this room.',
+            roomId,
+          ),
+        );
+        return;
+      }
+
+      io.to(targetPeer.socketId).emit('signal:receive', {
+        roomId,
+        peerId: senderPeer.peerId,
+        signalData,
+      });
     });
 
     // 5. Handle disconnection
