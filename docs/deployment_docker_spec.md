@@ -6,19 +6,65 @@ This document specifies the containerized deployment architecture for Project Sh
 
 ## 1. Early POC Staging Deployment
 
-Before production infrastructure is complete, the Backend POC is deployed to a restricted staging environment so the team can validate real HTTPS/WSS, DNS, reverse-proxy, and remote-network behavior.
+Before production infrastructure is complete, the Backend POC is deployed to a dedicated, restricted staging environment (`poc.shipri.app`) so the team can validate real HTTPS/WSS, DNS, reverse-proxy, and remote-network behavior without exposing production services or secrets.
 
-The initial POC staging scope includes:
+### 1.1. Environment Identity and Scope Boundary
 
-* A dedicated hostname such as `poc.shipri.app`.
-* Caddy HTTPS/WSS termination.
-* The Node.js signaling server and `/health` endpoint.
-* Restricted CORS for approved local and staging prototype origins.
-* No Coturn, production secrets, production traffic, or production-readiness claim.
+* **Explicit POC Staging Identity**: `poc.shipri.app` is a pre-production test environment and is not production-ready. Staging reverse-proxy responses should identify the environment via headers:
+  * `X-Shipri-Environment: poc-staging`
+  * `X-Robots-Tag: noindex, nofollow`
+* **Included Services**: the Node.js signaling server (`shipri-server`), `GET /health`, Socket.IO signaling over WSS (`/socket.io/*`), and, once frontend prototype foundation passes `BP-6`, the diagnostic prototype (`shipri-client`).
+* **Excluded Scope and Zero-Secret Rule**: no production traffic, real user files, Coturn relay container, TURN credentials, `TURN_SHARED_SECRET`, or production secrets exist in the POC staging environment. `ice:get` returns configured public STUN endpoints only.
 
 After the frontend prototype foundation is implemented, it is deployed to the approved staging origin and used to verify Socket.IO and direct WebRTC connectivity between devices on different networks.
 
-POC staging deployment and rollback commands must be documented before the Backend POC Acceptance Gate. Full production deployment remains governed by the sections below.
+POC staging configuration, smoke checks, deployment, update, rollback, and log-inspection procedures are completed in tickets 16 through 18 before the Backend POC Acceptance Gate (`BP-6`). Full production deployment remains governed by Sections 2 through 6 below.
+
+### 1.2. Hostname, Approved Origins, and Port Matrix
+
+| Setting | Backend POC Staging Value / Rule | Production / Deferred Comparison |
+| :--- | :--- | :--- |
+| Staging hostname | `poc.shipri.app` | Isolated from production `shipri.app` and `turn.shipri.app`. |
+| Approved CORS `ALLOWED_ORIGINS` | `https://poc.shipri.app,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173` (or `https://poc.shipri.app` only for staging-only access) | `https://shipri.app` and wildcard `*` are prohibited on POC staging. |
+| Public host ports | `80/tcp` (ACME HTTP-01 challenge / HTTPS redirect) and `443/tcp` (HTTPS `/health`, WSS `/socket.io/*`, prototype UI) | Served via external host proxy or standalone Caddy, never both simultaneously. |
+| Internal container ports | `5001/tcp` (`shipri-server` on `shipri-network`), `80/tcp` (`shipri-client` on `shipri-network` / `nginx-proxy`) | `5001/tcp` must use internal network `expose` and must not be published directly on `0.0.0.0:5001`. |
+| Excluded NAT traversal ports | `3478/udp`, `3478/tcp`, `5349/tcp`, `49152-65535/udp` | Coturn TURN/TURNS ports stay closed until full backend development. |
+
+### 1.3. Reverse-Proxy Topology (Avoiding Port 80/443 Collisions)
+
+The staging host must use exactly one reverse-proxy owner on public ports `80/tcp` and `443/tcp`:
+
+* **Topology A - Host External `nginx-proxy` Network (`docker-compose.prod.yml`)**: used on multi-service VPS hosts (including the active deployment target) where an existing external reverse proxy already owns `80` and `443`.
+  * Staging containers attach to the internal `shipri-network` and external `nginx-proxy` Docker networks without declaring host `ports` on `80` or `443`.
+  * The host reverse proxy terminates TLS for `poc.shipri.app` and forwards `/health` and `/socket.io/*` (preserving `Upgrade` and `Connection` headers for WebSockets, plus `X-Shipri-Environment: poc-staging` and `X-Robots-Tag: noindex, nofollow`) to `shipri-server:5001`, and `/` to `shipri-client:80`.
+* **Topology B - Standalone Bundled Caddy (`docker-compose.yml` + `Caddyfile`)**: used on a dedicated staging host where ports `80` and `443` are unoccupied.
+  * The bundled `shipri-proxy` (Caddy) service binds `80:80` and `443:443`, terminates TLS for `poc.shipri.app`, sets `X-Shipri-Environment: poc-staging` and `X-Robots-Tag: noindex, nofollow`, and proxies `/health` and `/socket.io/*` to `server:5001`.
+
+Before deploying or changing reverse-proxy mode on a host, verify whether ports `80` and `443` are already bound:
+
+```bash
+ss -tulpn | grep -E ':(80|443)\s'
+```
+
+### 1.4. Access Restrictions and Secret Isolation
+
+* **No Direct Backend Port Exposure**: the signaling container listens on internal port `5001` only; external clients reach it solely over TLS (`443/tcp`) through the reverse proxy.
+* **Strict Origin Allowlist**: Express HTTP CORS and Socket.IO CORS enforce `ALLOWED_ORIGINS` without wildcards (`*`) and reject unapproved or production origins such as `https://shipri.app`.
+* **Staging Crawler and Proxy Controls**: responses include `X-Robots-Tag: noindex, nofollow` and `X-Shipri-Environment: poc-staging`. When running closed remote tests, restrict access at the reverse-proxy layer (for example IP allowlisting or HTTP Basic Auth on non-health UI routes) without exposing production credentials.
+* **Zero Secrets**: do not set `TURN_SHARED_SECRET` or commit `.env` files, private keys, or placeholder secrets in repository configs.
+
+### 1.5. Required DNS and Server Prerequisites
+
+Before deploying the Backend POC to staging:
+
+1. **DNS Record**: configure an `A` (and optional `AAAA`) DNS record for `poc.shipri.app` pointing to the staging VPS public IP, and verify propagation before requesting TLS certificates:
+   ```bash
+   dig +short A poc.shipri.app
+   ```
+2. **Server Runtime**: Linux VPS with Docker Engine and Docker Compose v2 installed.
+3. **Firewall**: permit inbound `22/tcp` (restricted SSH), `80/tcp`, and `443/tcp`; keep `5001/tcp` and Coturn ports (`3478`, `5349`, `49152-65535`) closed externally.
+4. **Proxy Prerequisite**: confirm either the external `nginx-proxy` Docker network exists for Topology A (`docker network inspect nginx-proxy`) or host ports `80/tcp` and `443/tcp` are free for Topology B.
+5. **Deployment Workspace and Runtime Env**: prepare the host deployment directory (for example `/root/containers/shipri`) with an uncommitted `.env` containing only non-secret POC staging settings (`PORT`, `ALLOWED_ORIGINS`, `STUN_URLS`).
 
 ---
 
