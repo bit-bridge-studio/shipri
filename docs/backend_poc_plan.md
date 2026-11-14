@@ -96,7 +96,7 @@ The Backend POC reads and validates runtime configuration through `server/src/co
 | `ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173` | Non-empty comma-separated canonical `http://` or `https://` origins without wildcard (`*`), credentials, path, query, or fragment. |
 | `STUN_URLS` | `stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302` | Non-empty comma-separated `stun:host:port` or `stuns:host:port` endpoints with valid port `1`-`65535`. |
 
-See `server/.env.example` for the local environment template.
+See `server/.env.example` for local defaults and the restricted POC staging template (`ALLOWED_ORIGINS=https://poc.shipri.app,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173`, excluding `https://shipri.app`).
 
 ### POC Health Endpoint Contract
 
@@ -227,12 +227,13 @@ The POC deliberately differs from production in these ways:
 
 **Work:**
 
-* Define a dedicated staging hostname such as `poc.shipri.app`.
-* Build and run the signaling server on the test server.
-* Configure HTTPS/WSS termination and Socket.IO proxying through Caddy.
-* Restrict CORS to the approved local and staging prototype origins.
+* Define the dedicated POC staging environment at `poc.shipri.app`, explicitly identified as pre-production staging (`X-Shipri-Environment: poc-staging`, `X-Robots-Tag: noindex, nofollow`, not production-ready).
+* Document DNS (`A`/`AAAA` record for `poc.shipri.app`) and server prerequisites (Docker, Docker Compose v2, host firewall allowing `80/tcp` and `443/tcp` while keeping `5001/tcp` and Coturn ports `3478`/`5349`/relay closed externally).
+* Document the staging reverse-proxy topology (external `nginx-proxy` network in `docker-compose.prod.yml` vs. standalone Caddy in `docker-compose.yml`) so HTTPS/WSS termination and `/health` + `/socket.io/*` proxying avoid port `80/443` collisions.
+* Build and run the signaling server on the test server on internal port `5001`.
+* Restrict CORS to the approved staging and local prototype origins (`https://poc.shipri.app` plus local dev origins, rejecting `https://shipri.app` and `*`).
 * Expose the health endpoint for deployment verification.
-* Keep TURN, production secrets, and production traffic out of the POC deployment.
+* Keep TURN, `TURN_SHARED_SECRET`, production secrets, and production traffic out of the POC deployment.
 * Document deploy, update, rollback, and log-inspection commands.
 
 **Exit criteria:**
