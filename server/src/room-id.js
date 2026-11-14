@@ -129,6 +129,13 @@ export function validateRoomLeavePayload(payload) {
 }
 
 /**
+ * Validates the `ice:get` payload according to protocol error precedence.
+ */
+export function validateIceGetPayload(payload) {
+  return validateRoomIdEnvelope(payload, 'Invalid ice:get payload.');
+}
+
+/**
  * Validates the `signal:forward` payload according to protocol error precedence.
  */
 export function validateSignalForwardPayload(payload) {
