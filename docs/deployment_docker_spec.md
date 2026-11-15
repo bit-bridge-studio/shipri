@@ -66,6 +66,49 @@ Before deploying the Backend POC to staging:
 4. **Proxy Prerequisite**: confirm either the external `nginx-proxy` Docker network exists for Topology A (`docker network inspect nginx-proxy`) or host ports `80/tcp` and `443/tcp` are free for Topology B.
 5. **Deployment Workspace and Runtime Env**: prepare the host deployment directory (for example `/root/containers/shipri`) with an uncommitted `.env` containing only non-secret POC staging settings (`PORT`, `ALLOWED_ORIGINS`, `STUN_URLS`).
 
+### 1.6. Deployable POC Staging Configuration, Validation, and Smoke Checks
+
+Both supported reverse-proxy topologies share the same secret-free signaling server runtime defaults and container health/WebSocket routing:
+
+* **Topology A (`docker-compose.prod.yml` + `client/nginx.conf`)**: builds `shipri-server` (`expose: 5001`) and `shipri-client` (`expose: 80`), attaches both to `shipri-network` and external `nginx-proxy` with zero host `ports:` bindings, and leaves `TURN_SHARED_SECRET` and `coturn` omitted. On the external host `nginx-proxy` (or Nginx Proxy Manager), terminate TLS for `poc.shipri.app` with WebSockets enabled and either proxy `/health` and `/socket.io/*` to `shipri-server:5001` and `/` to `shipri-client:80`, or proxy all paths for `poc.shipri.app` to `shipri-client:80` (where `client/nginx.conf` proxies `/health` and `/socket.io/` to `http://server:5001` over `shipri-network` and sets `X-Shipri-Environment: poc-staging` and `X-Robots-Tag: noindex, nofollow`).
+* **Topology B (`docker-compose.yml` + `Caddyfile`)**: runs bundled `shipri-proxy` (`CADDY_SITE_ADDRESS=${CADDY_SITE_ADDRESS:-poc.shipri.app}`), `shipri-client`, and `shipri-server` without any TURN secrets, and isolates `coturn` behind Docker Compose profile `turn` (`profiles: ["turn"]`) so default staging runs omit TURN.
+
+Validate rendered configurations locally or on the staging host before starting containers:
+
+```bash
+docker compose -f docker-compose.prod.yml config
+docker compose -f docker-compose.yml config
+```
+
+Confirm neither output includes `TURN_SHARED_SECRET` or the `coturn` service.
+
+Build and start the Backend POC staging stack for the active host topology:
+
+```bash
+# Topology A (VPS with external nginx-proxy)
+docker compose -f docker-compose.prod.yml up -d --build
+
+# Topology B (standalone host with unoccupied 80/443)
+docker compose -f docker-compose.yml up -d --build
+```
+
+Run initial deployment smoke checks after startup (automated in ticket 17):
+
+```bash
+# 1. Verify HTTPS health payload and staging identity headers
+curl -fsSI https://poc.shipri.app/health
+curl -fsS https://poc.shipri.app/health
+
+# 2. Verify CORS allows poc.shipri.app and rejects production shipri.app
+curl -fsSI -H "Origin: https://poc.shipri.app" https://poc.shipri.app/health
+curl -fsSI -H "Origin: https://shipri.app" https://poc.shipri.app/health
+
+# 3. Verify Socket.IO Engine.IO handshake and WebSocket/WSS transport
+curl -fsS -H "Origin: https://poc.shipri.app" "https://poc.shipri.app/socket.io/?EIO=4&transport=polling"
+```
+
+Expected results: `/health` returns `200 OK` with `Cache-Control: no-store`, JSON `{"status":"ok","roomsCount":...}`, and `X-Shipri-Environment: poc-staging`; `https://poc.shipri.app` receives `access-control-allow-origin: https://poc.shipri.app` while `https://shipri.app` omits `access-control-allow-origin`; Socket.IO polling returns an Engine.IO session handshake (`0{"sid":...}`) and full WSS connectivity is verified over `https://poc.shipri.app`.
+
 ---
 
 ## 2. Production System Architecture in Docker
@@ -88,16 +131,16 @@ graph TD
 
 ## 3. Docker Compose Configuration (`docker-compose.yml`)
 
-The compose file orchestrates the services in the production environment:
+The standalone Compose file orchestrates `reverse-proxy`, `client`, and `server` by default (Backend POC staging mode), while gating `coturn` behind the `turn` profile for full backend NAT traversal (`docker compose --profile turn up -d`). Multi-service hosts with an existing external proxy use `docker-compose.prod.yml` instead (see Section 1.3 and 1.6):
 
 ```yaml
-version: '3.8'
-
 services:
   reverse-proxy:
     image: caddy:2.7-alpine
     container_name: shipri-proxy
     restart: unless-stopped
+    environment:
+      - CADDY_SITE_ADDRESS=${CADDY_SITE_ADDRESS:-poc.shipri.app}
     ports:
       - "80:80"
       - "443:443"
@@ -115,6 +158,10 @@ services:
       dockerfile: Dockerfile
     container_name: shipri-client
     restart: unless-stopped
+    expose:
+      - "80"
+    depends_on:
+      - server
 
   server:
     build:
@@ -123,9 +170,10 @@ services:
     container_name: shipri-server
     restart: unless-stopped
     environment:
-      - PORT=5001
-      - NODE_ENV=production
-      - TURN_SHARED_SECRET=${TURN_SHARED_SECRET}
+      - PORT=${PORT:-5001}
+      - NODE_ENV=${NODE_ENV:-production}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://poc.shipri.app,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
+      - STUN_URLS=${STUN_URLS:-stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302}
     expose:
       - "5001"
 
@@ -133,6 +181,8 @@ services:
     image: coturn/coturn:4.6-alpine
     container_name: shipri-turn
     restart: unless-stopped
+    profiles:
+      - turn
     network_mode: "host" # Host mode is critical for dynamic port allocations in WebRTC
     volumes:
       - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf
@@ -183,16 +233,22 @@ CMD ["node", "src/index.js"]
 
 ## 5. Reverse Proxy Setup (`Caddyfile`)
 
-Caddy handles SSL termination automatically for the web app and Socket.IO endpoint. Below is the production `Caddyfile` schema:
+Caddy handles TLS termination automatically for the web app, `/health`, and Socket.IO endpoint in standalone deployments. `Caddyfile` defaults `CADDY_SITE_ADDRESS` to `poc.shipri.app` with staging headers (set `CADDY_SITE_ADDRESS=shipri.app` in production full-backend deployments; external `nginx-proxy` deployments rely on the host proxy and `client/nginx.conf` for `/health` and `/socket.io/` proxying):
 
 ```caddy
-# Replace with your actual domain name
-shipri.app {
-    # 1. Route API & WebSocket calls to the signaling server
+{$CADDY_SITE_ADDRESS:poc.shipri.app} {
+    header {
+        X-Shipri-Environment "poc-staging"
+        X-Robots-Tag "noindex, nofollow"
+    }
+
+    # 1. Route Socket.IO HTTP polling and WSS WebSocket traffic
     reverse_proxy /socket.io/* server:5001
+
+    # 2. Route HTTP health checks
     reverse_proxy /health server:5001
 
-    # 2. Route all other traffic to the static client container
+    # 3. Route all other requests to the static SPA client
     reverse_proxy * client:80
 }
 ```
