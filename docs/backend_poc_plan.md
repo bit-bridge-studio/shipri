@@ -232,7 +232,7 @@ The POC deliberately differs from production in these ways:
 * Document the staging reverse-proxy topology (external `nginx-proxy` network in `docker-compose.prod.yml` vs. standalone Caddy in `docker-compose.yml`) so HTTPS/WSS termination and `/health` + `/socket.io/*` proxying avoid port `80/443` collisions.
 * Validate the secret-free Compose configs (`docker compose -f docker-compose.prod.yml config`, `docker compose -f docker-compose.yml config`) and build/start the staging stack (`docker compose -f docker-compose.prod.yml up -d --build` or `docker compose -f docker-compose.yml up -d --build`) with the signaling server on internal port `5001`.
 * Restrict CORS to the approved staging and local prototype origins (`https://poc.shipri.app` plus local dev origins, rejecting `https://shipri.app` and `*`).
-* Expose the health endpoint and document deployment smoke checks covering HTTPS `/health`, CORS origin verification, and Socket.IO WSS connectivity.
+* Expose the health endpoint and document repeatable deployment smoke checks (`npm --prefix server run smoke:staging` and `curl` HTTPS `/health` + CORS checks) covering HTTPS `/health`, CORS origin verification, and Socket.IO WSS connectivity.
 * Keep TURN, `TURN_SHARED_SECRET`, production secrets, and production traffic out of the POC deployment.
 * Document deploy, update, rollback, and log-inspection commands.
 
@@ -268,4 +268,4 @@ At the end of each POC stage, run:
 * Backend unit and Socket.IO integration tests.
 * `node --check src/index.js` or the applicable server check.
 * The documented backend development startup command where relevant.
-* `docker compose -f docker-compose.prod.yml config` and `docker compose -f docker-compose.yml config` plus staging HTTPS `/health`, CORS origin, and WSS connection smoke checks when deployment changes.
+* `docker compose -f docker-compose.prod.yml config`, `docker compose -f docker-compose.yml config`, and `npm --prefix server run smoke:staging` (plus manual HTTPS `/health` and CORS checks) when deployment changes or after staging updates/rollbacks.
