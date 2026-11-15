@@ -92,22 +92,31 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.yml up -d --build
 ```
 
-Run initial deployment smoke checks after startup (automated in ticket 17):
+Run the repeatable, secret-free staging smoke checks after startup (and confirm exit code `0`):
 
 ```bash
-# 1. Verify HTTPS health payload and staging identity headers
+# 1. Automated HTTPS /health, CORS, and WSS Socket.IO round-trip check
+#    Requires no production secrets; returns exit code 1 and [FAIL] stderr on error.
+npm --prefix server run smoke:staging
+
+# Optional overrides (for example another staging hostname or longer timeout):
+SMOKE_BASE_URL=https://poc.shipri.app SMOKE_ORIGIN=https://poc.shipri.app SMOKE_TIMEOUT_MS=5000 npm --prefix server run smoke:staging
+
+# 2. Manual curl checks for HTTPS health payload, headers, and CORS enforcement
 curl -fsSI https://poc.shipri.app/health
 curl -fsS https://poc.shipri.app/health
-
-# 2. Verify CORS allows poc.shipri.app and rejects production shipri.app
 curl -fsSI -H "Origin: https://poc.shipri.app" https://poc.shipri.app/health
 curl -fsSI -H "Origin: https://shipri.app" https://poc.shipri.app/health
-
-# 3. Verify Socket.IO Engine.IO handshake and WebSocket/WSS transport
-curl -fsS -H "Origin: https://poc.shipri.app" "https://poc.shipri.app/socket.io/?EIO=4&transport=polling"
 ```
 
-Expected results: `/health` returns `200 OK` with `Cache-Control: no-store`, JSON `{"status":"ok","roomsCount":...}`, and `X-Shipri-Environment: poc-staging`; `https://poc.shipri.app` receives `access-control-allow-origin: https://poc.shipri.app` while `https://shipri.app` omits `access-control-allow-origin`; Socket.IO polling returns an Engine.IO session handshake (`0{"sid":...}`) and full WSS connectivity is verified over `https://poc.shipri.app`.
+Expected results: `npm --prefix server run smoke:staging` prints `[PASS]` with exit code `0` after confirming HTTPS `200 OK`, `Cache-Control: no-store`, JSON `{"status":"ok","roomsCount":...}`, matching `access-control-allow-origin: https://poc.shipri.app`, and a WSS WebSocket `room:create` -> `room:created` -> `room:leave` probe; `/health` omits `access-control-allow-origin` when requested from `https://shipri.app`; failed HTTP, CORS, schema, TLS, or WSS checks exit non-zero (`1`).
+
+When to run staging smoke checks:
+
+1. Immediately after the initial Backend POC staging deployment.
+2. After every staging container image rebuild, backend code update, or `.env` configuration change.
+3. After any reverse-proxy (`nginx-proxy`, `Caddyfile`, `client/nginx.conf`), TLS certificate, DNS, or firewall rule change.
+4. After executing any rollback procedure and before closing the Backend POC Acceptance Gate (`BP-6`).
 
 ---
 
