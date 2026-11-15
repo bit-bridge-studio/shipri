@@ -18,7 +18,7 @@ Before production infrastructure is complete, the Backend POC is deployed to a d
 
 After the frontend prototype foundation is implemented, it is deployed to the approved staging origin and used to verify Socket.IO and direct WebRTC connectivity between devices on different networks.
 
-POC staging configuration, smoke checks, deployment, update, rollback, and log-inspection procedures are completed in tickets 16 through 18 before the Backend POC Acceptance Gate (`BP-6`). Full production deployment remains governed by Sections 2 through 6 below.
+POC staging environment boundaries, configuration, smoke checks, and operational procedures (deploy, update, rollback, and log inspection) are defined in Subsections 1.1 through 1.7 below before the Backend POC Acceptance Gate (`BP-6`). Full production deployment remains governed by Sections 2 through 6 below.
 
 ### 1.2. Hostname, Approved Origins, and Port Matrix
 
@@ -117,6 +117,130 @@ When to run staging smoke checks:
 2. After every staging container image rebuild, backend code update, or `.env` configuration change.
 3. After any reverse-proxy (`nginx-proxy`, `Caddyfile`, `client/nginx.conf`), TLS certificate, DNS, or firewall rule change.
 4. After executing any rollback procedure and before closing the Backend POC Acceptance Gate (`BP-6`).
+
+### 1.7. POC Staging Operations: Deploy, Update, Rollback, and Log Inspection
+
+> **Not Production-Ready:** The Backend POC staging environment (`poc.shipri.app`) is a restricted pre-production test environment and **is not production-ready**. It omits production room authorization tokens, rate limiting, room TTL and capacity limits, dynamic TURN credentials (`coturn` / `TURN_SHARED_SECRET`), and persistent room storage. Restarting or recreating `shipri-server` clears all in-memory rooms (`activeRooms`).
+
+Choose `<compose-file>` according to the host reverse-proxy topology from Subsection `1.3`:
+
+* **Topology A (VPS with external `nginx-proxy`)**: `docker-compose.prod.yml`
+* **Topology B (standalone host with unoccupied ports `80/443`)**: `docker-compose.yml`
+
+#### 1.7.1. Initial Deployment
+
+1. Confirm DNS, host port ownership, and proxy prerequisites from Subsection `1.5`:
+   ```bash
+   dig +short A poc.shipri.app
+   ss -tulpn | grep -E ':(80|443)\s'
+   # Topology A only:
+   docker network inspect nginx-proxy
+   ```
+2. Clone the repository into the host deployment workspace (for example `/root/containers/shipri`), check out the target Backend POC revision, and record the deployed commit for rollback tracking:
+   ```bash
+   cd /root/containers/shipri
+   git checkout <branch-or-commit>
+   git rev-parse --short HEAD
+   ```
+3. Create an uncommitted host `.env` containing only non-secret POC staging settings (`PORT=5001`, approved `ALLOWED_ORIGINS`, and `STUN_URLS` as documented in `server/.env.example`). Do not set `TURN_SHARED_SECRET` or any production credentials.
+4. Render and inspect the Compose configuration before starting containers, confirming neither `TURN_SHARED_SECRET` nor `coturn` is present:
+   ```bash
+   # Topology A:
+   docker compose -f docker-compose.prod.yml config
+
+   # Topology B:
+   docker compose -f docker-compose.yml config
+   ```
+5. Build and start the staging containers, then verify their status:
+   ```bash
+   # Topology A:
+   docker compose -f docker-compose.prod.yml up -d --build
+   docker compose -f docker-compose.prod.yml ps
+
+   # Topology B:
+   docker compose -f docker-compose.yml up -d --build
+   docker compose -f docker-compose.yml ps
+   ```
+6. Run the staging smoke checks from Subsection `1.6` (`npm --prefix server run smoke:staging` plus the manual `curl` HTTPS `/health` and CORS checks) and require exit code `0`.
+
+#### 1.7.2. Routine Updates
+
+1. Record the currently running working Git revision before making changes:
+   ```bash
+   cd /root/containers/shipri
+   PREV_REV=$(git rev-parse --short HEAD)
+   echo "Previous working revision: ${PREV_REV}"
+   ```
+2. Fetch and check out the updated revision (use `git pull --ff-only` when advancing a tracked branch, or `git checkout <target-commit>`), and re-validate the Compose configuration:
+   ```bash
+   git fetch origin
+   git checkout <branch-or-commit>
+   # When on a branch:
+   git pull --ff-only origin <branch>
+   docker compose -f <compose-file> config
+   ```
+3. Rebuild and recreate the containers (recreating `shipri-server` resets active in-memory rooms, so notify active remote testers beforehand):
+   ```bash
+   # Topology A:
+   docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+
+   # Topology B:
+   docker compose -f docker-compose.yml up -d --build --remove-orphans
+   ```
+4. Check container state (`docker compose -f <compose-file> ps`) and run the staging smoke checks from Subsection `1.6`:
+   ```bash
+   npm --prefix server run smoke:staging
+   curl -fsSI -H "Origin: https://poc.shipri.app" https://poc.shipri.app/health
+   curl -fsSI -H "Origin: https://shipri.app" https://poc.shipri.app/health
+   ```
+   If any smoke check fails (returns non-zero exit code `1`), execute the rollback procedure in Subsection `1.7.3` immediately.
+
+#### 1.7.3. Rollback Procedure (Restoring the Previous Working POC Version)
+
+1. Confirm the previous known-working Git revision (`PREV_REV` saved before the update, or locate it with `git log --oneline -n 5`):
+   ```bash
+   cd /root/containers/shipri
+   git log --oneline -n 5
+   ```
+2. Check out the previous working POC revision, restore any non-secret `.env` overrides (`PORT`, `ALLOWED_ORIGINS`, `STUN_URLS`) if they changed during the failed update, and re-validate the Compose config:
+   ```bash
+   git checkout "${PREV_REV}"
+   docker compose -f <compose-file> config
+   ```
+3. Rebuild and restart the containers from the restored revision:
+   ```bash
+   # Topology A:
+   docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+
+   # Topology B:
+   docker compose -f docker-compose.yml up -d --build --remove-orphans
+   ```
+4. Verify container health and re-run the staging smoke checks from Subsection `1.6` to confirm HTTPS `/health`, CORS, and WSS Socket.IO connectivity are restored (exit code `0`):
+   ```bash
+   docker compose -f <compose-file> ps
+   npm --prefix server run smoke:staging
+   curl -fsS https://poc.shipri.app/health
+   ```
+
+#### 1.7.4. Privacy-Safe Log Inspection
+
+* **What `shipri-server` Logs in the POC**: stdout records lifecycle events only (`Signaling server listening on port <port>`, `Socket connected: <socketId>`, `Room created: <roomId>`, `Peer joined room: <roomId>`, `Room closed after <leave|disconnect>: <roomId>`, `Socket disconnected: <socketId>`). It never logs `signalData` SDP/ICE blobs, E2EE keys, URL hash fragments (`#key=...`), file metadata, or file contents.
+* **Bounded Log-Inspection Commands**:
+  ```bash
+  # Topology A (external nginx-proxy + shipri-server + shipri-client):
+  docker compose -f docker-compose.prod.yml ps
+  docker compose -f docker-compose.prod.yml logs --tail=100 --timestamps server
+  docker compose -f docker-compose.prod.yml logs --tail=100 --timestamps client
+
+  # Topology B (bundled Caddy + shipri-server + shipri-client):
+  docker compose -f docker-compose.yml ps
+  docker compose -f docker-compose.yml logs --tail=100 --timestamps server
+  docker compose -f docker-compose.yml logs --tail=100 --timestamps reverse-proxy
+  ```
+* **Secret and Payload Protection Rules**:
+  * Never print or paste `.env` files, `printenv`, `env`, or raw `docker inspect` environment blocks into terminal recordings, issues, or support threads.
+  * Never enable reverse-proxy request-body logging or WebSocket frame payload logging that could capture `signalData` SDP/ICE payloads.
+  * When sharing proxy access logs for debugging HTTPS/WSS routing failures, inspect only recent bounded lines (`--tail=100`) and redact client IP addresses.
 
 ---
 
