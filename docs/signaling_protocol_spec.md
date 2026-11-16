@@ -445,6 +445,15 @@ The Backend POC validates requests in this order and returns the first matching 
 
 An error does not mutate room or socket membership. The server emits `room:error` only to the socket that requested the failed operation. When `roomId` was supplied and passed format validation, the error includes it even if no room exists; otherwise `roomId` is omitted. A disconnected socket cannot receive `room:error`, so disconnect cleanup is defined only by the lifecycle transitions above.
 
+### 3.7. Frontend Prototype Client Contract Mapping
+
+The Part 2 Frontend Prototype (`frontend_prototype_plan.md` Section `4`) consumes Sections `2.1` and `3.1` through `3.6` of this specification directly against the Backend POC without mock signaling assumptions:
+
+* **Equal-Peer Negotiation Boundary**: `room:create` (`negotiationDuty: "offerer"`) and `room:join` (`negotiationDuty: "answerer"`) establish initial WebRTC SDP and single-channel (`"shipri-diagnostic"`) negotiation duties only between two equal peers. Negotiation duty never restricts which peer may send application messages in the prototype or publish/download files in the final product.
+* **Replacement-Peer Re-Offerer Promotion**: When a connected peer receives `peer:left` (`reason: "leave" | "disconnect"`), the remaining peer closes its stale `RTCPeerConnection` and `RTCDataChannel`, remains in `WaitingForPeer`, and assumes `"offerer"` duty when the next replacement peer triggers `peer:joined`.
+* **Client-Side State & Sanitized Logging**: The prototype branches on `room:error` `code` values rather than `message`, preserves active room state when an error is returned, and redacts raw SDP payloads, ICE credentials, secrets, and diagnostic message bodies from logs.
+* **Out-of-Band WebRTC vs. Deferred Production Scope**: Prototype `ping`, `pong`, and short diagnostic `text` payloads travel solely over the direct WebRTC `RTCDataChannel` and never cross the signaling server. Production room authorization and dynamic TURN credentials are added in Part 3 (`backend_development_plan.md`), while E2EE, the encrypted shared file board, and file transfers remain deferred to Part 4 (`frontend_development_plan.md`).
+
 ---
 
 ## 4. Server Memory Schema
