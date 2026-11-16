@@ -45,6 +45,20 @@ The backend test foundation is installed in `server/`:
 
 The frontend does not yet define a `test` script. Its test setup remains subject to the dependency approval required by the frontend prototype test-foundation ticket.
 
+### 1.3. Frontend Prototype Test Contract (Part 2 Foundation vs. Part 3 Expansion)
+
+Frontend prototype testing follows the frozen POC contract in `frontend_prototype_plan.md` Section `4` and distinguishes unit mocking from live Backend POC integration:
+
+* **Mocking Boundary (`Unit vs. Live POC`)**: `client/` unit tests (planned in `FP-1`) isolate UI rendering, event-log sanitization, state transitions, and WebRTC/Socket.IO wrappers behind deterministic Socket.IO and `RTCPeerConnection` mocks without requiring a live backend. Conversely, prototype harness verification (`FP-2` through `FP-G1`) runs locally and on `https://poc.shipri.app` against the real Backend POC without mocks.
+* **Part 2 POC Foundation Test Coverage (`FP-1` to `FP-G1`)**:
+  * Consumed Socket.IO lifecycle (`connect`, `disconnect`, `connect_error`) and sanitization of logged events, room IDs, ICE summaries, and errors (never logging raw SDP blobs, credentials, or secrets).
+  * Equal-peer room controls and state transitions (`unaffiliated`, `waiting_for_peer`, `connected`), `creator`/`joiner` entry roles vs. signaling-only `offerer`/`answerer` duty, `peer:joined`, `peer:left` (`reason: "leave" | "disconnect"`), replacement-peer `offerer` promotion, and local WebRTC teardown on leave or disconnect.
+  * Stable `room:error` code handling and precedence scenarios (`INVALID_PAYLOAD`, `INVALID_ROOM_ID`, `ROOM_NOT_FOUND`, `UNAUTHORIZED`, `ROOM_FULL`, `PEER_UNAVAILABLE`, `SERVER_BUSY`) preserving valid membership state on rejected requests.
+  * Development STUN-only `ice:get` / `ice:credentials` validation, bidirectional SDP offer/answer and trickle ICE forwarding (`signal:forward` / `signal:receive`), `"shipri-diagnostic"` `RTCDataChannel` setup, and bidirectional `ping` / `pong` / short `text` messages initiated by either peer.
+* **Deferred Scope Beyond Part 2 Foundation**:
+  * **Part 3 Prototype Expansion (`FP-5` to `FP-6`)**: tests room authorization tokens, dynamic TURN credentials, candidate-pair summaries without credential leakage, and selectable `iceTransportPolicy: "all" | "relay"` forced-TURN diagnostics.
+  * **Part 4 Final Product (`frontend_development_plan.md`)**: covers E2EE key derivation, encrypted shared file board state, bounded-memory chunking, disk persistence, and Playwright E2E transfer checks (Section `3`).
+
 ---
 
 ## 2. Integration Testing (Signaling Protocol)
