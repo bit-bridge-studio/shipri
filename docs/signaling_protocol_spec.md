@@ -495,6 +495,7 @@ The backend stores no file-board or transfer state.
 ## 5. Security and Validation
 
 * Validate every payload and room membership before relaying.
+* `signal:forward` verifies active room membership for the sender via `socketRooms` and `room.peers` (`UNAUTHORIZED` if not an active member), requires a second active peer (`PEER_UNAVAILABLE` if absent), and emits `signal:receive` (`{ roomId, peerId, signalData }`) directly to the other active peer's socket without inspecting, logging, or mutating `signalData`.
 * Treat peer and socket identifiers as opaque operational data.
 * Do not log SDP bodies, ICE credentials, authorization tokens, E2EE keys, file metadata, or transfer payloads.
 * Apply production authorization, CORS, rate limits, room limits, and TTL as defined by the backend and security plans.
