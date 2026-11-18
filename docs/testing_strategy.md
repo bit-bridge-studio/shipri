@@ -16,7 +16,7 @@ graph TD
 
 ### 1.1. Unit Testing (Fast, Isolated)
 * **Scope**: Math helpers, cryptographic encodings, encrypted board reducers, transfer identity, chunk framing, chunk index calculations, and signaling room limits logic.
-* **Tools**: Vitest is the active test runner for the Backend POC. Backend tests run once with `vitest run`; watch mode is not part of the committed `test` script.
+* **Tools**: Vitest is the active test runner for both the Backend POC (`server/`) and the Frontend Prototype (`client/`). Tests run once with `vitest run`; watch mode is not part of the committed `test` scripts.
 * **Key Targets**:
   * Verify AES-GCM encryption and decryption outputs match standard vectors.
   * Verify the incrementing 12-byte IV generator outputs the correct binary array.
@@ -43,13 +43,20 @@ The backend test foundation is installed in `server/`:
 * `server/src/smoke-check.js` (`npm run smoke:staging`) and `server/test/smoke-check.test.js` cover secret-free staging smoke check config validation, HTTPS/WSS enforcement, `/health` status/headers/CORS/payload verification, WebSocket `room:create` -> `room:created` -> `room:leave` cleanup, and non-zero CLI failure behavior.
 * Integration tests start isolated signaling server instances on an operating-system-assigned port (`127.0.0.1:0`), verify HTTP `/health` and Socket.IO connectivity, and close both client and server resources after each test.
 
-The frontend does not yet define a `test` script. Its test setup remains subject to the dependency approval required by the frontend prototype test-foundation ticket.
+The active frontend prototype test foundation is installed in `client/` and documented in Subsection `1.3`.
 
 ### 1.3. Frontend Prototype Test Contract (Part 2 Foundation vs. Part 3 Expansion)
 
-Frontend prototype testing follows the frozen POC contract in `frontend_prototype_plan.md` Section `4` and distinguishes unit mocking from live Backend POC integration:
+The frontend prototype test foundation is installed in `client/` and follows the frozen POC contract in `frontend_prototype_plan.md` Section `4`, distinguishing isolated unit mocking from live Backend POC integration:
 
-* **Mocking Boundary (`Unit vs. Live POC`)**: `client/` unit tests (planned in `FP-1`) isolate UI rendering, event-log sanitization, state transitions, and WebRTC/Socket.IO wrappers behind deterministic Socket.IO and `RTCPeerConnection` mocks without requiring a live backend. Conversely, prototype harness verification (`FP-2` through `FP-G1`) runs locally and on `https://poc.shipri.app` against the real Backend POC without mocks.
+* **Active `client/` Vitest Setup**:
+  * `client/package.json` declares `engines.node: "^20.19.0 || ^22.12.0 || >=24.0.0"`, matching the supported runtime intersection of Vite (`^5.3.1`) and Vitest (`^3.2.4`).
+  * Run a clean install with `cd client && npm ci`.
+  * Run the frontend unit suite once (`vitest run`) with `cd client && npm test`; Vitest discovers test files under `client/test/` without a separate configuration file.
+  * Verify the Vite production bundle with `cd client && npm run build`.
+  * `client/test/helpers/mock-socket.js` exports `createMockSocket` and `createMockSocketFactory` to simulate Socket.IO connection lifecycle (`connect`, `disconnect`, `connect_error`), inbound server events, outbound emits, and listener cleanup without a live backend.
+  * `client/test/foundation.test.js` verifies the Socket.IO mock helpers and baseline `App` shell rendering (`react-dom/server` `renderToStaticMarkup`) in Vitest without a browser.
+* **Mocking Boundary (`Unit vs. Live POC`)**: `client/` unit tests (`FP-1` onward) isolate UI rendering, event-log sanitization, state transitions, and WebRTC/Socket.IO wrappers behind deterministic Socket.IO (`client/test/helpers/mock-socket.js`) and `RTCPeerConnection` mocks without requiring a live backend. Conversely, prototype harness verification (`FP-2` through `FP-G1`) runs locally and on `https://poc.shipri.app` against the real Backend POC without mocks.
 * **Part 2 POC Foundation Test Coverage (`FP-1` to `FP-G1`)**:
   * Consumed Socket.IO lifecycle (`connect`, `disconnect`, `connect_error`) and sanitization of logged events, room IDs, ICE summaries, and errors (never logging raw SDP blobs, credentials, or secrets).
   * Equal-peer room controls and state transitions (`unaffiliated`, `waiting_for_peer`, `connected`), `creator`/`joiner` entry roles vs. signaling-only `offerer`/`answerer` duty, `peer:joined`, `peer:left` (`reason: "leave" | "disconnect"`), replacement-peer `offerer` promotion, and local WebRTC teardown on leave or disconnect.
