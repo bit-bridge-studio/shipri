@@ -30,9 +30,8 @@ The backend test foundation is installed in `server/`:
 * Run the complete backend suite with `cd server && npm test`.
 * Vitest discovers the JavaScript test files under `server/test/` without a separate configuration file.
 * `server/test/helpers/socket-client.js` creates isolated `socket.io-client` connections with reconnection disabled and closes them with `socket.disconnect()` during cleanup.
-* The baseline integration test starts a test-only Socket.IO server on an operating-system-assigned port, verifies a client connection, and closes both client and server resources after the test.
-
-Importing the production entry point still starts its listening process. Separating server construction from process startup and running contract tests against that isolated production server are tracked by the next Backend POC ticket.
+* `server/src/server.js` exposes `createSignalingServer()`, separating Express, HTTP, and Socket.IO construction and cleanup (`close()`) from the listening process entry point in `server/src/index.js`.
+* Integration tests start isolated signaling server instances on an operating-system-assigned port (`127.0.0.1:0`), verify HTTP `/health` and Socket.IO connectivity, and close both client and server resources after each test.
 
 The frontend does not yet define a `test` script. Its test setup remains subject to the dependency approval required by the frontend prototype test-foundation ticket.
 
