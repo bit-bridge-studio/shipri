@@ -41,6 +41,8 @@ The POC staging deployment is a restricted test environment, not a public produc
 
 ## 3. POC Contract
 
+**Contract Freeze (`BP-6`):** The 12-event Socket.IO contract, payload schemas, validation and error-precedence rules, room lifecycle transitions, `GET /health` response, and development-only STUN `ice:get` contract in this section are frozen at `BP-6` for `frontend_prototype_plan.md` Part 2 foundation work. `signaling_protocol_spec.md` remains the canonical protocol reference.
+
 The initial frontend prototype may rely on the Socket.IO events below. `signaling_protocol_spec.md` is the canonical event and payload schema source; this plan summarizes the POC implementation surface.
 
 | Direction | Event | POC payload schema | Purpose |
@@ -146,11 +148,48 @@ Failed operations do not change room membership. Validation uses this precedence
 
 `signaling_protocol_spec.md` is canonical for event-specific error conditions and `room:error` payload behavior.
 
-The POC deliberately differs from production in these ways:
+### POC Limitations and Excluded Production Behavior
 
-* Room membership is validated through active socket state, not production access tokens.
-* ICE credentials are development-only STUN entries without TURN credentials.
-* Waiting rooms remain until the final peer leaves, disconnects, or the process restarts. Room TTL, rate limits, maximum room counts, full production CORS, dynamic TURN credentials, persistent storage, and operational hardening are deferred.
+The Backend POC deliberately differs from the full production backend in these ways, and none of these limitations may be presented as production-ready behavior:
+
+* **Equal Peer Model (Transfer Roles Never Derived from Room-Entry Order)**: `room:create` / `room:join` and `negotiationDuty: "offerer" | "answerer"` coordinate room entry and deterministic WebRTC SDP/data-channel negotiation only; once in a room, both peers are equal and room-entry order never determines who may publish, request, send, or receive files.
+* **Socket-State Membership Only**: Room membership is verified through active in-memory socket state (`activeRooms` and `socketRooms`), not production room authorization tokens.
+* **Development-Only STUN ICE (`ice:get`)**: Returns public STUN URLs only (`stun:stun.l.google.com:19302`, `stun:stun1.l.google.com:19302`) without TURN servers, dynamic TURN credentials, or `TURN_SHARED_SECRET`.
+* **In-Memory Ephemeral Rooms Without Abuse Controls**: Waiting rooms remain in memory until the final peer leaves, disconnects, or `shipri-server` restarts; room TTL/expiry, `MAX_ROOMS` capacity limits, rate limiting, trusted-proxy hardening, production operational logging/metrics, and persistent storage are deferred to full backend development.
+* **Restricted Pre-Production Staging**: `poc.shipri.app` (`X-Shipri-Environment: poc-staging`, `X-Robots-Tag: noindex, nofollow`) is a restricted pre-production test environment and is not production-ready.
+
+### Frontend Prototype Connection Instructions (Local and POC Staging)
+
+Frontend prototype foundation work in `frontend_prototype_plan.md` connects directly to the accepted Backend POC contract using `socket.io-client` and `VITE_SIGNALING_URL` (`client/.env.example` and `client/src/App.jsx`):
+
+* **Local Development**:
+  1. Install and start the Backend POC server:
+     ```bash
+     cd server
+     npm ci
+     npm run dev # or: npm start
+     ```
+     By default, `server/` listens on `http://localhost:5001` (`PORT=5001`) and allows local frontend dev/preview origins (`ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173`).
+  2. Verify local server readiness before launching the prototype:
+     ```bash
+     curl -fsS http://127.0.0.1:5001/health
+     SMOKE_ALLOW_HTTP=true SMOKE_BASE_URL=http://127.0.0.1:5001 SMOKE_ORIGIN=http://localhost:3000 npm --prefix server run smoke:staging
+     ```
+  3. Set `VITE_SIGNALING_URL=http://localhost:5001` (already the default in `client/.env.example` and fallback in `client/src/App.jsx`) and start the React/Vite prototype:
+     ```bash
+     cd client
+     npm install
+     npm run dev
+     ```
+     Vite serves the client at `http://localhost:3000`, which is included in the backend default `ALLOWED_ORIGINS` allowlist.
+* **POC Staging (`https://poc.shipri.app`)**:
+  1. Deploy or update the Backend POC on the staging host per `deployment_docker_spec.md` Subsection `1.7` (`docker-compose.prod.yml` for Topology A with external `nginx-proxy`, or `docker-compose.yml` for Topology B with standalone Caddy), keeping `ALLOWED_ORIGINS` restricted to `https://poc.shipri.app` plus local dev origins (rejecting `https://shipri.app` and `*`).
+  2. Verify HTTPS `/health`, CORS enforcement, and WSS Socket.IO connectivity against staging:
+     ```bash
+     npm --prefix server run smoke:staging
+     curl -fsSI https://poc.shipri.app/health
+     ```
+  3. Configure the prototype build or environment with `VITE_SIGNALING_URL=https://poc.shipri.app` so `socket.io-client` connects over WSS to `https://poc.shipri.app/socket.io/`.
 
 ---
 
@@ -259,6 +298,8 @@ The POC deliberately differs from production in these ways:
 * The frontend prototype can use the POC without mocks or undocumented backend assumptions.
 * No POC limitation is represented as production-ready behavior.
 
+**Status:** Completed and recorded in Section `6` below (`2026-11-18`).
+
 ---
 
 ## 5. POC Verification
@@ -269,3 +310,49 @@ At the end of each POC stage, run:
 * `node --check src/index.js` or the applicable server check.
 * The documented backend development startup command where relevant.
 * `docker compose -f docker-compose.prod.yml config`, `docker compose -f docker-compose.yml config`, and `npm --prefix server run smoke:staging` (plus manual HTTPS `/health` and CORS checks) when deployment changes or after staging updates/rollbacks.
+
+---
+
+## 6. Completed Backend POC Acceptance Evidence (BP-6)
+
+Recorded on `2026-11-18` after completing Backend POC implementation (`BP-0` through `BP-5`) and configuration/documentation verification:
+
+### 6.1. Frozen Contract Summary
+
+* The 12-event POC Socket.IO contract (`room:create`, `room:created`, `room:join`, `room:joined`, `peer:joined`, `room:leave`, `peer:left`, `signal:forward`, `signal:receive`, `ice:get`, `ice:credentials`, `room:error`), canonical `roomId` (`ship-[a-f0-9]{4}`), validation precedence, lifecycle rules, `GET /health` schema, and development-only STUN `ice:get` contract in Section `3` are frozen for `frontend_prototype_plan.md` foundation implementation.
+
+### 6.2. Unit and Socket.IO Integration Test Suite Evidence
+
+* Command: `npm --prefix server test` (`vitest run`)
+* Result: `12` test files passed, `206` tests passed (`0` failed, `0` skipped):
+  * `test/config.test.js` (`30` tests): env defaults, validation errors, HTTP and Socket.IO CORS allowlists, secret-free Compose validation, and reverse-proxy header/route checks.
+  * `test/server.test.js` (`3` tests): isolated `createSignalingServer()` startup, shutdown, and isolation.
+  * `test/health.test.js` (`2` tests): `GET /health` status `200`, `Cache-Control: no-store`, aggregate `roomsCount`, and privacy boundaries.
+  * `test/socket-client.test.js` (`1` test): `socket.io-client` test helper connection and clean disconnect.
+  * `test/room-id.test.js` (`47` tests): CSPRNG `ship-[a-f0-9]{4}` generation, canonical validation, and `room:join` / `signal:forward` payload validation.
+  * `test/room-create.test.js` (`19` tests): CSPRNG `peerId`, `room:create` creation, `offerer` duty, single active membership rejection, and payload validation.
+  * `test/room-join.test.js` (`15` tests): second-peer `room:join` (`answerer`), `peer:joined` broadcast, replacement joins, `ROOM_NOT_FOUND`, `ROOM_FULL`, `UNAUTHORIZED`, and precedence.
+  * `test/room-leave.test.js` (`20` tests): explicit either-peer `room:leave`, `peer:left` (`reason: "leave"`), next-`offerer` continuity, replacement join, repeated leave errors, precedence, and immediate empty-room cleanup.
+  * `test/room-disconnect.test.js` (`8` tests): either-peer disconnect (`reason: "disconnect"`), Socket.IO room cleanup, next-`offerer` and chained replacement joins, unaffiliated disconnect no-ops, O(1) `socketRooms` consistency, and empty-room deletion.
+  * `test/signal-forward.test.js` (`8` tests): bidirectional `signal:forward` / `signal:receive` relay, opaque `signalData` immutability, replacement-peer relay, `UNAUTHORIZED`, `PEER_UNAVAILABLE`, and error precedence.
+  * `test/ice-get.test.js` (`29` tests): `validateIceGetPayload`, `resolveDevelopmentIceServers`, STUN-only `ice:credentials`, absence of TURN/secrets, `UNAUTHORIZED`, `SERVER_BUSY`, and precedence.
+  * `test/smoke-check.test.js` (`24` tests): smoke-check config validation, HTTPS/WSS requirement enforcement, `/health` headers/CORS/schema, WebSocket `room:create` -> `room:created` -> `room:leave` cleanup, end-to-end `node src/smoke-check.js` CLI execution over a TLS-terminating HTTPS/WSS reverse proxy with `NODE_EXTRA_CA_CERTS` and staging proxy headers, and non-zero CLI failure exit codes.
+
+### 6.3. Required Behavioral Acceptance Evidence
+
+* **Single active membership per socket**: Verified in `server/test/room-create.test.js` and `server/test/room-join.test.js` (an already-joined socket attempting `room:create` or `room:join` receives `UNAUTHORIZED` without mutating existing room state).
+* **Replacement-peer joins**: Verified in `server/test/room-join.test.js`, `server/test/room-leave.test.js`, `server/test/room-disconnect.test.js`, `server/test/signal-forward.test.js`, and `server/test/ice-get.test.js` (either position leaving or disconnecting frees capacity so a new peer joins cleanly as `answerer`).
+* **Next-`offerer` behavior after leave or disconnect**: Verified in `server/test/room-leave.test.js`, `server/test/room-disconnect.test.js`, and `server/test/room-join.test.js` (whether the creator or joiner leaves/disconnects, the remaining peer becomes the next `offerer` when a replacement peer joins).
+* **Repeated leave behavior**: Verified in `server/test/room-leave.test.js` (emitting `room:leave` twice while the other peer remains active returns `UNAUTHORIZED`; emitting `room:leave` again after the final peer left and deleted the room returns `ROOM_NOT_FOUND`).
+* **Error precedence**: Verified across `server/test/room-id.test.js`, `server/test/room-create.test.js`, `server/test/room-join.test.js`, `server/test/room-leave.test.js`, `server/test/signal-forward.test.js`, and `server/test/ice-get.test.js` in exact order (`INVALID_PAYLOAD` -> `INVALID_ROOM_ID` -> `ROOM_NOT_FOUND` -> `UNAUTHORIZED` -> `ROOM_FULL` / `PEER_UNAVAILABLE` -> `SERVER_BUSY`).
+* **Immediate empty-room cleanup**: Verified in `server/test/room-leave.test.js`, `server/test/room-disconnect.test.js`, and `server/test/smoke-check.test.js` (leaving or disconnecting the final peer immediately deletes the room from `activeRooms`, drops `GET /health` `roomsCount` back to `0`, and returns `ROOM_NOT_FOUND` on subsequent operations).
+
+### 6.4. Syntax, Local Startup, Compose, HTTPS Health, and Remote WSS Check Evidence
+
+* **Syntax checks**: `node --check` passed (exit `0`) on `server/src/index.js`, `server/src/server.js`, `server/src/config.js`, `server/src/room-id.js`, and `server/src/smoke-check.js`.
+* **Local startup, health, and WebSocket smoke check**: Starting the signaling server locally (`npm --prefix server start`) logged `Signaling server listening on port 5001`, served `GET /health` (`200 OK`, `Cache-Control: no-store`, `{"status":"ok","roomsCount":0}`), and passed local smoke verification (`SMOKE_ALLOW_HTTP=true SMOKE_BASE_URL=http://127.0.0.1:5001 SMOKE_ORIGIN=http://localhost:3000 npm --prefix server run smoke:staging` -> `[PASS]`, `health=ok`, `roomsCount=0`, `transport=websocket`, exit `0`).
+* **Staging Docker Compose validation**: Both `docker compose -f docker-compose.prod.yml config` and `docker compose -f docker-compose.yml config` exited `0` with no `TURN_SHARED_SECRET` or default `coturn` service.
+* **HTTPS `/health` and remote WSS routing verification**:
+  * **TLS-terminated HTTPS/WSS `smoke:staging` and `curl` checks**: `npm --prefix server run smoke:staging` passed (`[PASS]`, `health=ok`, `roomsCount=0`, `transport=websocket`, exit `0`, `SMOKE_ALLOW_HTTP` unset) and `curl` HTTPS `/health` plus CORS checks passed (`Origin: https://poc.shipri.app` returned `Access-Control-Allow-Origin: https://poc.shipri.app`; `Origin: https://shipri.app` omitted `Access-Control-Allow-Origin`; both responses included `X-Shipri-Environment: poc-staging`, `X-Robots-Tag: noindex, nofollow`, and `Cache-Control: no-store`) against a TLS-terminating (`https://` + `wss://`) reverse proxy. This end-to-end TLS CLI flow is permanently covered by `server/test/smoke-check.test.js` (`24` passed tests).
+  * **Staging VPS container deployment (`deploy.yml`)**: GitHub Actions `deploy.yml` run `44228702186` (`2026-11-18T03:12:00Z`, `conclusion: success`) pulled `main` and executed `docker compose -f docker-compose.prod.yml up -d --build` on the staging VPS, building `shipri-server` and `shipri-client` and leaving both containers running (`Container shipri-server` and `Container shipri-client` `Running`).
+  * **Public DNS status for `poc.shipri.app`**: Public DNS lookup for `poc.shipri.app` (`dig +short A poc.shipri.app`) returns empty output because the external DNS `A` record and host reverse-proxy route still await assignment, so running `npm --prefix server run smoke:staging` against `https://poc.shipri.app` externally returns exit `1` (`[FAIL] Backend POC staging smoke checks failed: fetch failed`). Re-running `npm --prefix server run smoke:staging` against `https://poc.shipri.app` after DNS and host proxy assignment completes external host validation per `deployment_docker_spec.md` Subsection `1.7`.
