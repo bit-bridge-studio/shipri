@@ -2,11 +2,12 @@ import { createServer } from 'node:http';
 import cors from 'cors';
 import express from 'express';
 import { Server } from 'socket.io';
-import { resolveServerConfig } from './config.js';
+import { resolveDevelopmentIceServers, resolveServerConfig } from './config.js';
 import {
   allocateUniqueRoomId,
   createRoomError,
   generatePeerId,
+  validateIceGetPayload,
   validateRoomCreatePayload,
   validateRoomJoinPayload,
   validateRoomLeavePayload,
@@ -330,7 +331,64 @@ export function createSignalingServer(options = {}) {
       });
     });
 
-    // 5. Handle disconnection
+    // 5. Return Backend POC development-only STUN configuration for active members
+    socket.on('ice:get', (payload) => {
+      const validation = validateIceGetPayload(payload);
+      if (!validation.ok) {
+        socket.emit('room:error', validation.error);
+        return;
+      }
+
+      const { roomId } = validation;
+      const room = activeRooms.get(roomId);
+      if (!room) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'ROOM_NOT_FOUND',
+            'Room does not exist or has expired.',
+            roomId,
+          ),
+        );
+        return;
+      }
+
+      const isActiveMember =
+        socketRooms.get(socket.id) === roomId &&
+        room.peers.some((peer) => peer.socketId === socket.id);
+      if (!isActiveMember) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'UNAUTHORIZED',
+            'Socket is not a member of this room.',
+            roomId,
+          ),
+        );
+        return;
+      }
+
+      // Development-only STUN response; dynamic TURN credentials are deferred to production.
+      const iceConfig = resolveDevelopmentIceServers(config.stunUrls);
+      if (!iceConfig.ok) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'SERVER_BUSY',
+            'Development ICE configuration is unavailable.',
+            roomId,
+          ),
+        );
+        return;
+      }
+
+      socket.emit('ice:credentials', {
+        roomId,
+        iceServers: iceConfig.iceServers,
+      });
+    });
+
+    // 6. Handle disconnection
     socket.on('disconnect', () => {
       console.log(`Socket disconnected: ${socket.id}`);
 

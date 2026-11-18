@@ -150,6 +150,38 @@ function parseStunUrls(rawStunUrls) {
   );
 }
 
+function resolveRuntimeStunUrls(rawStunUrls) {
+  if (rawStunUrls === undefined) {
+    return Object.freeze([...DEFAULT_STUN_URLS]);
+  }
+
+  try {
+    return parseStunUrls(rawStunUrls);
+  } catch {
+    return Object.freeze([]);
+  }
+}
+
+/**
+ * Resolves development-only STUN-only `iceServers` entries from runtime config.
+ * Dynamic TURN credentials are excluded from the Backend POC and deferred to production.
+ */
+export function resolveDevelopmentIceServers(stunUrls) {
+  if (stunUrls === undefined) {
+    return { ok: false };
+  }
+
+  try {
+    const validated = parseStunUrls(stunUrls);
+    return {
+      ok: true,
+      iceServers: [{ urls: [...validated] }],
+    };
+  } catch {
+    return { ok: false };
+  }
+}
+
 /**
  * Loads and validates Backend POC runtime configuration from an environment map.
  */
@@ -186,6 +218,9 @@ export function resolveServerConfig(options = {}) {
     );
   }
 
+  const rawStunUrls =
+    options.stunUrls !== undefined ? options.stunUrls : baseEnv.STUN_URLS;
+
   return Object.freeze({
     port: parsePort(options.port !== undefined ? options.port : baseEnv.PORT),
     allowedOrigins: parseAllowedOrigins(
@@ -193,8 +228,6 @@ export function resolveServerConfig(options = {}) {
         ? options.allowedOrigins
         : baseEnv.ALLOWED_ORIGINS,
     ),
-    stunUrls: parseStunUrls(
-      options.stunUrls !== undefined ? options.stunUrls : baseEnv.STUN_URLS,
-    ),
+    stunUrls: resolveRuntimeStunUrls(rawStunUrls),
   });
 }

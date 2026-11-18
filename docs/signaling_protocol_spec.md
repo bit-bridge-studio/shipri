@@ -315,7 +315,7 @@ interface SignalReceivePayload {
 
 ### 3.5. ICE Credentials
 
-Authorized room members emit `ice:get` after creating or joining a room.
+Any active room member (in either `WaitingForPeer` or `Connected` state) may emit `ice:get` after creating or joining a room. The server validates room membership via `socketRooms` and `room.peers` (`UNAUTHORIZED` for non-members) and responds with `ice:credentials` on the requesting socket only, or emits `SERVER_BUSY` if the development STUN configuration is unavailable or invalid.
 
 Client to server:
 
