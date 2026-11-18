@@ -5,8 +5,18 @@ import {
   clearEventLog,
   createInitialPrototypeState,
   createRoomLifecycleActions,
+  recoverErrorState,
+  shouldClearDraftRoomInput,
 } from './prototype/diagnostic-state.js';
-import { createSignalingClient } from './signaling/socket-client.js';
+import {
+  MALFORMED_TEST_SCENARIOS,
+  resolveRoomErrorDescriptor,
+  runValidationScenario,
+} from './prototype/room-errors.js';
+import {
+  createSignalingClient,
+  sanitizeTextValue,
+} from './signaling/socket-client.js';
 
 function getConnectionStatusBanner(connectionStatus) {
   if (connectionStatus === 'connected') {
@@ -25,6 +35,63 @@ function formatLastError(lastError) {
   const prefix = lastError.code ? `${lastError.code}: ` : '';
   const roomSuffix = lastError.roomId ? ` (${lastError.roomId})` : '';
   return `${prefix}${lastError.message}${roomSuffix}`;
+}
+
+function resolveDisconnectNotice({
+  connectionStatus,
+  roomId,
+  peerState,
+  negotiationDuty,
+  eventLog,
+  signalingClient,
+}) {
+  if (connectionStatus === 'disconnected') {
+    const clientStatus = signalingClient?.getStatus?.();
+    let localReason =
+      clientStatus?.status === 'disconnected' && clientStatus.disconnectReason
+        ? clientStatus.disconnectReason
+        : null;
+
+    if (!localReason && Array.isArray(eventLog)) {
+      for (let index = eventLog.length - 1; index >= 0; index -= 1) {
+        const entry = eventLog[index];
+        if (entry?.event === 'connect') {
+          break;
+        }
+        if (entry?.event === 'disconnect') {
+          localReason = entry.meta?.reason || 'unknown';
+          break;
+        }
+      }
+    }
+
+    if (localReason) {
+      const safeReason =
+        sanitizeTextValue(localReason, { maxLength: 80 }) || 'unknown';
+      return `Signaling disconnected (${safeReason}). Active room and peer state were reset; sanitized event log was preserved.`;
+    }
+  }
+
+  if (roomId && peerState === 'waiting_for_peer' && Array.isArray(eventLog)) {
+    for (let index = eventLog.length - 1; index >= 0; index -= 1) {
+      const entry = eventLog[index];
+      if (
+        entry?.event === 'room:created' ||
+        entry?.event === 'room:joined' ||
+        entry?.event === 'peer:joined'
+      ) {
+        break;
+      }
+      if (entry?.event === 'peer:left') {
+        if (entry.meta?.reason === 'disconnect') {
+          return `Remote peer disconnected from ${roomId}. You remain in the room as ${negotiationDuty ?? 'offerer'} waiting for a replacement peer.`;
+        }
+        break;
+      }
+    }
+  }
+
+  return null;
 }
 
 function App({ signalingClient, initialState } = {}) {
@@ -76,6 +143,17 @@ function App({ signalingClient, initialState } = {}) {
 
   const socketConnected = connectionStatus === 'connected';
   const statusBannerText = getConnectionStatusBanner(connectionStatus);
+  const errorDescriptor = lastError
+    ? resolveRoomErrorDescriptor(lastError)
+    : null;
+  const disconnectNotice = resolveDisconnectNotice({
+    connectionStatus,
+    roomId,
+    peerState,
+    negotiationDuty,
+    eventLog,
+    signalingClient: signalingClient ?? clientRef.current,
+  });
 
   const getLifecycleActions = () => {
     const client = signalingClient ?? clientRef.current;
@@ -108,6 +186,27 @@ function App({ signalingClient, initialState } = {}) {
       return;
     }
     actions.leaveRoom(roomId);
+  };
+
+  const handleClearError = () => {
+    if (!lastError) {
+      return;
+    }
+    if (shouldClearDraftRoomInput(prototypeState)) {
+      setJoinRoomId('');
+    }
+    setPrototypeState((prev) => recoverErrorState(prev));
+  };
+
+  const handleRunValidationScenario = (scenarioId) => {
+    const client = signalingClient ?? clientRef.current;
+    if (!client || !socketConnected) {
+      return;
+    }
+    runValidationScenario(client, scenarioId, {
+      roomId,
+      targetRoomId: joinRoomId.trim() || undefined,
+    });
   };
 
   const handleClearLog = () => {
@@ -192,6 +291,12 @@ function App({ signalingClient, initialState } = {}) {
         </div>
       </section>
 
+      {disconnectNotice ? (
+        <div className="disconnect-notice" role="status" aria-live="polite">
+          {disconnectNotice}
+        </div>
+      ) : null}
+
       <section className="status-grid" aria-label="Diagnostic status">
         <div className="status-card">
           <span className="status-label">Connection State</span>
@@ -241,12 +346,88 @@ function App({ signalingClient, initialState } = {}) {
         <div
           className={`status-card status-card--wide${lastError ? ' status-card--error' : ''}`}
         >
-          <span className="status-label">Last Error</span>
-          <span
-            className={`status-value${lastError ? ' status-value--error' : ' status-value--muted'}`}
-          >
-            {formatLastError(lastError)}
-          </span>
+          <div className="status-card-header">
+            <span className="status-label">Last Error</span>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleClearError}
+              disabled={!lastError}
+            >
+              Clear Error
+            </button>
+          </div>
+
+          {lastError && errorDescriptor ? (
+            <div className="error-diagnostics">
+              <div className="error-diagnostics-meta">
+                <span className="event-log-badge event-log-badge--error">
+                  {lastError.code}
+                </span>
+                <span className="event-log-badge">
+                  Category: {errorDescriptor.category}
+                </span>
+                {!errorDescriptor.known &&
+                lastError.code !== 'UNKNOWN_ERROR' ? (
+                  <span className="event-log-badge">
+                    Fallback: {errorDescriptor.code}
+                  </span>
+                ) : null}
+                {lastError.roomId ? (
+                  <span className="event-log-badge">{lastError.roomId}</span>
+                ) : null}
+                {lastError.source ? (
+                  <span className="event-log-badge">{lastError.source}</span>
+                ) : null}
+              </div>
+              <span className="status-value status-value--error">
+                {errorDescriptor.title}: {formatLastError(lastError)}
+              </span>
+              <p className="error-recovery-guidance">
+                Recovery: {errorDescriptor.recoveryGuidance}
+              </p>
+            </div>
+          ) : (
+            <span className="status-value status-value--muted">
+              {formatLastError(lastError)}
+            </span>
+          )}
+        </div>
+      </section>
+
+      <section
+        className="validation-panel"
+        aria-label="Validation and error scenarios"
+      >
+        <div className="validation-panel-header">
+          <h2 className="validation-panel-title">
+            Validation &amp; Error Scenarios
+          </h2>
+          <p className="validation-panel-note">
+            Emit malformed payloads or invalid room requests via raw socket
+            events to exercise server room:error responses without modifying
+            active room membership.
+          </p>
+        </div>
+
+        <div className="scenario-grid">
+          {MALFORMED_TEST_SCENARIOS.map((scenario) => (
+            <button
+              key={scenario.id}
+              type="button"
+              className="btn-secondary scenario-btn"
+              onClick={() => handleRunValidationScenario(scenario.id)}
+              disabled={!socketConnected}
+            >
+              <span className="scenario-btn-header">
+                <span className="scenario-btn-label">{scenario.label}</span>
+                <span className="event-log-badge event-log-badge--error">
+                  {scenario.expectedCode}
+                </span>
+              </span>
+              <span className="scenario-btn-desc">{scenario.description}</span>
+            </button>
+          ))}
         </div>
       </section>
 
