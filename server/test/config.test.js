@@ -149,6 +149,47 @@ describe('createSignalingServer configuration', () => {
     ).toBeNull();
   });
 
+  test('supports restricted POC staging origins without exposing secrets or permitting production origins', async () => {
+    const stagingConfig = loadConfig({
+      PORT: '5001',
+      ALLOWED_ORIGINS:
+        'https://poc.shipri.app,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173',
+      STUN_URLS: 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302',
+      TURN_SHARED_SECRET: 'ignored_in_poc',
+    });
+    const server = await startIsolatedServer(stagingConfig);
+
+    expect(Object.keys(server.config)).toEqual([
+      'port',
+      'allowedOrigins',
+      'stunUrls',
+    ]);
+
+    const stagingOriginResponse = await fetch(`${server.baseUrl}/health`, {
+      headers: { Origin: 'https://poc.shipri.app' },
+    });
+    expect(stagingOriginResponse.status).toBe(200);
+    expect(
+      stagingOriginResponse.headers.get('access-control-allow-origin'),
+    ).toBe('https://poc.shipri.app');
+
+    const localViteOriginResponse = await fetch(`${server.baseUrl}/health`, {
+      headers: { Origin: 'http://localhost:5173' },
+    });
+    expect(localViteOriginResponse.status).toBe(200);
+    expect(
+      localViteOriginResponse.headers.get('access-control-allow-origin'),
+    ).toBe('http://localhost:5173');
+
+    const productionOriginResponse = await fetch(`${server.baseUrl}/health`, {
+      headers: { Origin: 'https://shipri.app' },
+    });
+    expect(productionOriginResponse.status).toBe(200);
+    expect(
+      productionOriginResponse.headers.get('access-control-allow-origin'),
+    ).toBeNull();
+  });
+
   test('throws immediately when constructed with invalid config overrides', () => {
     expect(() => createSignalingServer({ port: -1 })).toThrow(
       /Invalid PORT configuration/i,
