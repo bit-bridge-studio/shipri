@@ -12,7 +12,7 @@ When full backend development begins, I want room authorization, lifecycle, vali
 
 ## Acceptance Criteria
 
-- The room authorization model is defined independently from the short public room ID.
+- The room authorization model is defined independently from the short public room ID and is cryptographically separated from the E2EE encryption keys (for example via one-way HKDF domain derivation from the fragment secret) so authorization tokens never leak in URL paths/queries or expose E2EE key material to the untrusted signaling server.
 - The accepted Backend POC contract is migrated without breaking the frontend prototype unless a documented security correction requires it.
 - Socket.IO event schemas, validation rules, stable error codes, disconnect behavior, TTL, capacity, rate limits, and maximum active room count are documented.
 - Environment-driven ICE server and TURN credential response contracts are documented.
@@ -113,7 +113,7 @@ When Shipri is deployed, I want server, client, proxy, and environment configura
 - Secrets use environment substitution or generated deployment configuration.
 - The obsolete Compose `version` field is removed.
 - Health and readiness checks are added for relevant services.
-- Development and production Caddy routing and CORS settings are finalized.
+- Both standalone Caddy (`docker-compose.yml`) and external reverse-proxy (`docker-compose.prod.yml` with `nginx-proxy`) routing and CORS settings are finalized and synchronized across `client` and `server`.
 - Clean client and server Docker images build reproducibly using package lockfiles.
 - `docker compose config` contains no committed secret value.
 - Deployment documentation is synchronized.
