@@ -14,11 +14,7 @@ import {
 
 function hasActiveRoomMembership(activeRooms, socketId) {
   for (const room of activeRooms.values()) {
-    if (
-      room.hostSocketId === socketId ||
-      room.receiverSocketId === socketId ||
-      room.peers?.some((peer) => peer.socketId === socketId)
-    ) {
+    if (room.peers.some((peer) => peer.socketId === socketId)) {
       return true;
     }
   }
@@ -106,7 +102,7 @@ export function createSignalingServer(options = {}) {
       });
     });
 
-    // 2. Receiver joins room
+    // 2. Second peer joins room
     socket.on('room:join', (payload) => {
       const validation = validateRoomJoinPayload(payload);
       if (!validation.ok) {
@@ -129,8 +125,19 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      // Check if room is already full
-      if (room.receiverSocketId && room.receiverSocketId !== socket.id) {
+      if (hasActiveRoomMembership(activeRooms, socket.id)) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'UNAUTHORIZED',
+            'Socket already belongs to an active room.',
+            roomId,
+          ),
+        );
+        return;
+      }
+
+      if (room.peers.length >= 2) {
         socket.emit(
           'room:error',
           createRoomError(
@@ -142,15 +149,28 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      // Set receiver socket
-      room.receiverSocketId = socket.id;
+      const existingPeer = room.peers[0];
+      const peerId = generatePeerId();
+      const now = Date.now();
+
+      room.peers.push({
+        peerId,
+        socketId: socket.id,
+        joinedAt: now,
+      });
       socket.join(roomId);
 
-      console.log(`Receiver ${socket.id} joined room: ${roomId}`);
-      socket.emit('room:joined', { roomId, role: 'receiver' });
+      console.log(`Peer joined room: ${roomId}`);
+      socket.emit('room:joined', {
+        roomId,
+        peerId,
+        negotiationDuty: 'answerer',
+      });
 
-      // Notify Host
-      io.to(room.hostSocketId).emit('peer:joined', { peerSocketId: socket.id });
+      io.to(existingPeer.socketId).emit('peer:joined', {
+        roomId,
+        peerId,
+      });
     });
 
     // 3. Forward WebRTC signaling candidates/SDP
@@ -172,9 +192,9 @@ export function createSignalingServer(options = {}) {
       }
 
       // Relays the message to the other socket in the room
-      const targetSocketId = socket.id === room.hostSocketId ? room.receiverSocketId : room.hostSocketId;
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('signal:receive', { signalData });
+      const targetPeer = room.peers.find((peer) => peer.socketId !== socket.id);
+      if (targetPeer) {
+        io.to(targetPeer.socketId).emit('signal:receive', { signalData });
       }
     });
 
@@ -182,25 +202,29 @@ export function createSignalingServer(options = {}) {
     socket.on('disconnect', () => {
       console.log(`Socket disconnected: ${socket.id}`);
 
-      // Find rooms where this socket was host or receiver
       for (const [roomId, room] of activeRooms.entries()) {
-        if (room.hostSocketId === socket.id || room.peers?.[0]?.socketId === socket.id) {
-          console.log(`Host disconnected. Closing room: ${roomId}`);
-          if (room.receiverSocketId) {
-            io.to(room.receiverSocketId).emit('room:error', {
-              code: 'HOST_DISCONNECTED',
-              message: 'The host has disconnected. Room is closed.',
-            });
-          }
-          activeRooms.delete(roomId);
-        } else if (room.receiverSocketId === socket.id) {
-          console.log(`Receiver disconnected from room: ${roomId}`);
-          room.receiverSocketId = null;
-          io.to(room.hostSocketId).emit('room:error', {
-            code: 'RECEIVER_DISCONNECTED',
-            message: 'The receiver has disconnected. Room is waiting for reconnect.',
-          });
+        const peerIndex = room.peers.findIndex(
+          (peer) => peer.socketId === socket.id,
+        );
+        if (peerIndex === -1) {
+          continue;
         }
+
+        const [removedPeer] = room.peers.splice(peerIndex, 1);
+        socket.leave(roomId);
+
+        if (room.peers.length === 0) {
+          console.log(`Room closed after disconnect: ${roomId}`);
+          activeRooms.delete(roomId);
+          continue;
+        }
+
+        const remainingPeer = room.peers[0];
+        io.to(remainingPeer.socketId).emit('peer:left', {
+          roomId,
+          peerId: removedPeer.peerId,
+          reason: 'disconnect',
+        });
       }
     });
   });
