@@ -36,6 +36,7 @@ The backend test foundation is installed in `server/`:
 * `server/src/room-id.js` and `server/test/room-id.test.js` cover CSPRNG room ID generation (`crypto.randomBytes(2)`), canonical `ship-[a-f0-9]{4}` validation, and `room:join`/`signal:forward` payload error handling.
 * `server/test/room-create.test.js` covers CSPRNG peer ID generation, `room:create` payload validation, canonical `room:created` (`offerer`) responses, Socket.IO room joining, active-room uniqueness, `INVALID_PAYLOAD` validation, and `UNAUTHORIZED` duplicate membership rejection.
 * `server/test/room-join.test.js` covers second-peer `room:join` (`answerer`), `peer:joined` notifications, replacement joins after disconnect from either peer position, `ROOM_NOT_FOUND`, `ROOM_FULL`, `UNAUTHORIZED` duplicate membership rejection, and error precedence.
+* `server/test/room-leave.test.js` covers `validateRoomLeavePayload`, explicit either-peer `room:leave`, `peer:left` (`reason: "leave"`), replacement joins after leave, repeated and unauthorized leave errors, error precedence, and immediate empty-room deletion.
 * Integration tests start isolated signaling server instances on an operating-system-assigned port (`127.0.0.1:0`), verify HTTP `/health` and Socket.IO connectivity, and close both client and server resources after each test.
 
 The frontend does not yet define a `test` script. Its test setup remains subject to the dependency approval required by the frontend prototype test-foundation ticket.

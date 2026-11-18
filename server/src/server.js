@@ -9,6 +9,7 @@ import {
   generatePeerId,
   validateRoomCreatePayload,
   validateRoomJoinPayload,
+  validateRoomLeavePayload,
   validateSignalForwardPayload,
 } from './room-id.js';
 
@@ -20,6 +21,24 @@ function hasActiveRoomMembership(activeRooms, socketId) {
   }
 
   return false;
+}
+
+function removePeerFromRoom(io, activeRooms, room, peerIndex, socket, reason) {
+  const [removedPeer] = room.peers.splice(peerIndex, 1);
+  socket.leave(room.roomId);
+
+  if (room.peers.length === 0) {
+    console.log(`Room closed after ${reason}: ${room.roomId}`);
+    activeRooms.delete(room.roomId);
+    return;
+  }
+
+  const remainingPeer = room.peers[0];
+  io.to(remainingPeer.socketId).emit('peer:left', {
+    roomId: room.roomId,
+    peerId: removedPeer.peerId,
+    reason,
+  });
 }
 
 export function createSignalingServer(options = {}) {
@@ -173,7 +192,47 @@ export function createSignalingServer(options = {}) {
       });
     });
 
-    // 3. Forward WebRTC signaling candidates/SDP
+    // 3. Either peer explicitly leaves room
+    socket.on('room:leave', (payload) => {
+      const validation = validateRoomLeavePayload(payload);
+      if (!validation.ok) {
+        socket.emit('room:error', validation.error);
+        return;
+      }
+
+      const { roomId } = validation;
+      const room = activeRooms.get(roomId);
+      if (!room) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'ROOM_NOT_FOUND',
+            'Room does not exist or has expired.',
+            roomId,
+          ),
+        );
+        return;
+      }
+
+      const peerIndex = room.peers.findIndex(
+        (peer) => peer.socketId === socket.id,
+      );
+      if (peerIndex === -1) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'UNAUTHORIZED',
+            'Socket is not a member of this room.',
+            roomId,
+          ),
+        );
+        return;
+      }
+
+      removePeerFromRoom(io, activeRooms, room, peerIndex, socket, 'leave');
+    });
+
+    // 4. Forward WebRTC signaling candidates/SDP
     socket.on('signal:forward', (payload) => {
       const validation = validateSignalForwardPayload(payload);
       if (!validation.ok) {
@@ -198,11 +257,11 @@ export function createSignalingServer(options = {}) {
       }
     });
 
-    // 4. Handle disconnection
+    // 5. Handle disconnection
     socket.on('disconnect', () => {
       console.log(`Socket disconnected: ${socket.id}`);
 
-      for (const [roomId, room] of activeRooms.entries()) {
+      for (const room of activeRooms.values()) {
         const peerIndex = room.peers.findIndex(
           (peer) => peer.socketId === socket.id,
         );
@@ -210,21 +269,14 @@ export function createSignalingServer(options = {}) {
           continue;
         }
 
-        const [removedPeer] = room.peers.splice(peerIndex, 1);
-        socket.leave(roomId);
-
-        if (room.peers.length === 0) {
-          console.log(`Room closed after disconnect: ${roomId}`);
-          activeRooms.delete(roomId);
-          continue;
-        }
-
-        const remainingPeer = room.peers[0];
-        io.to(remainingPeer.socketId).emit('peer:left', {
-          roomId,
-          peerId: removedPeer.peerId,
-          reason: 'disconnect',
-        });
+        removePeerFromRoom(
+          io,
+          activeRooms,
+          room,
+          peerIndex,
+          socket,
+          'disconnect',
+        );
       }
     });
   });
