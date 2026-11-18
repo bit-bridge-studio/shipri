@@ -1,27 +1,44 @@
-import React, { useState, useEffect } from 'react';
-import { io } from 'socket.io-client';
+import React, { useEffect, useState } from 'react';
+import { createSignalingClient } from './signaling/socket-client.js';
 
-function App() {
-  const [socketConnected, setSocketConnected] = useState(false);
-  const [socket, setSocket] = useState(null);
+const DEFAULT_CONNECTION_STATE = Object.freeze({
+  status: 'disconnected',
+  connected: false,
+  lastError: null,
+});
+
+function App({ signalingClient } = {}) {
+  const [connectionState, setConnectionState] = useState(() =>
+    signalingClient ? signalingClient.getStatus() : DEFAULT_CONNECTION_STATE,
+  );
 
   useEffect(() => {
-    // Connect to signaling server (default development port 5001)
-    const newSocket = io(import.meta.env.VITE_SIGNALING_URL || 'http://localhost:5001');
-    setSocket(newSocket);
+    const client = signalingClient ?? createSignalingClient();
+    const ownsClient = !signalingClient;
 
-    newSocket.on('connect', () => {
-      setSocketConnected(true);
+    setConnectionState(client.getStatus());
+    const unsubscribeStatus = client.subscribeStatus((nextState) => {
+      setConnectionState(nextState);
     });
 
-    newSocket.on('disconnect', () => {
-      setSocketConnected(false);
-    });
+    if (ownsClient) {
+      client.connect();
+    }
 
     return () => {
-      newSocket.disconnect();
+      unsubscribeStatus();
+      if (ownsClient) {
+        client.dispose();
+      }
     };
-  }, []);
+  }, [signalingClient]);
+
+  const socketConnected = Boolean(connectionState?.connected);
+  const statusText = socketConnected
+    ? 'Signaling server connected'
+    : connectionState?.status === 'error'
+      ? 'Signaling connection error'
+      : 'Connecting to signaling server...';
 
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '80vh' }}>
@@ -36,7 +53,7 @@ function App() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', marginBottom: '30px' }}>
           <span className="pulse-dot" style={{ backgroundColor: socketConnected ? '#00F5D4' : '#ff0055' }}></span>
           <span style={{ fontSize: '0.9rem', color: '#8e9aa8' }}>
-            {socketConnected ? 'Signaling server connected' : 'Connecting to signaling server...'}
+            {statusText}
           </span>
         </div>
 
