@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   applyConnectionStatus,
   bindSignalingClient,
   clearEventLog,
   createInitialPrototypeState,
+  createRoomLifecycleActions,
 } from './prototype/diagnostic-state.js';
 import { createSignalingClient } from './signaling/socket-client.js';
 
@@ -27,6 +28,8 @@ function formatLastError(lastError) {
 }
 
 function App({ signalingClient, initialState } = {}) {
+  const clientRef = useRef(signalingClient ?? null);
+  const [joinRoomId, setJoinRoomId] = useState('');
   const [prototypeState, setPrototypeState] = useState(() => {
     const baseState = createInitialPrototypeState(initialState);
     return signalingClient
@@ -37,6 +40,7 @@ function App({ signalingClient, initialState } = {}) {
   useEffect(() => {
     const client = signalingClient ?? createSignalingClient();
     const ownsClient = !signalingClient;
+    clientRef.current = client;
     const unbind = bindSignalingClient(client, setPrototypeState);
 
     if (ownsClient) {
@@ -47,25 +51,68 @@ function App({ signalingClient, initialState } = {}) {
       unbind();
       if (ownsClient) {
         client.dispose();
+        clientRef.current = null;
       }
     };
   }, [signalingClient]);
-
-  const handleClearLog = () => {
-    setPrototypeState((prev) => clearEventLog(prev));
-  };
 
   const {
     connectionStatus,
     roomId,
     peerState,
+    entryRole = null,
     negotiationDuty,
+    selfPeerId = null,
+    remotePeerId = null,
     lastError,
     eventLog,
   } = prototypeState;
 
+  useEffect(() => {
+    if (roomId) {
+      setJoinRoomId('');
+    }
+  }, [roomId]);
+
   const socketConnected = connectionStatus === 'connected';
   const statusBannerText = getConnectionStatusBanner(connectionStatus);
+
+  const getLifecycleActions = () => {
+    const client = signalingClient ?? clientRef.current;
+    if (!client) {
+      return null;
+    }
+    return createRoomLifecycleActions(client, setPrototypeState);
+  };
+
+  const handleCreateRoom = () => {
+    const actions = getLifecycleActions();
+    if (!actions || !socketConnected || roomId) {
+      return;
+    }
+    actions.createRoom();
+  };
+
+  const handleJoinRoom = (event) => {
+    event.preventDefault();
+    const actions = getLifecycleActions();
+    if (!actions || !socketConnected || roomId) {
+      return;
+    }
+    actions.joinRoom(joinRoomId);
+  };
+
+  const handleLeaveRoom = () => {
+    const actions = getLifecycleActions();
+    if (!actions || !socketConnected || !roomId) {
+      return;
+    }
+    actions.leaveRoom(roomId);
+  };
+
+  const handleClearLog = () => {
+    setPrototypeState((prev) => clearEventLog(prev));
+  };
 
   return (
     <main className="glass-card diagnostic-shell">
@@ -86,6 +133,65 @@ function App({ signalingClient, initialState } = {}) {
         </div>
       </header>
 
+      <section className="room-controls" aria-label="Room controls">
+        <div className="room-controls-header">
+          <h2 className="room-controls-title">Room Controls</h2>
+          <p className="room-controls-note">
+            Both room members are equal peers. Entry role reflects entry history
+            only and negotiation duty is signaling-only; neither restricts
+            messages or implies file-transfer direction.
+          </p>
+        </div>
+
+        <div className="room-controls-actions">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={handleCreateRoom}
+            disabled={!socketConnected || Boolean(roomId)}
+          >
+            Create Room
+          </button>
+
+          <form className="room-join-form" onSubmit={handleJoinRoom}>
+            <label className="sr-only" htmlFor="join-room-id">
+              Room ID to join
+            </label>
+            <input
+              id="join-room-id"
+              name="roomId"
+              type="text"
+              className="room-id-input"
+              value={joinRoomId}
+              onChange={(event) => setJoinRoomId(event.target.value)}
+              placeholder="ship-xxxx"
+              aria-label="Room ID to join"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={!socketConnected || Boolean(roomId)}
+            />
+            <button
+              type="submit"
+              className="btn-secondary"
+              disabled={
+                !socketConnected || Boolean(roomId) || joinRoomId.trim() === ''
+              }
+            >
+              Join Room
+            </button>
+          </form>
+
+          <button
+            type="button"
+            className="btn-secondary btn-danger"
+            onClick={handleLeaveRoom}
+            disabled={!socketConnected || !roomId}
+          >
+            Leave Room
+          </button>
+        </div>
+      </section>
+
       <section className="status-grid" aria-label="Diagnostic status">
         <div className="status-card">
           <span className="status-label">Connection State</span>
@@ -104,6 +210,22 @@ function App({ signalingClient, initialState } = {}) {
         <div className="status-card">
           <span className="status-label">Peer State</span>
           <span className="status-value">{peerState}</span>
+          {selfPeerId ? (
+            <span className="status-hint">Self ID: {selfPeerId}</span>
+          ) : null}
+          {remotePeerId ? (
+            <span className="status-hint">Peer ID: {remotePeerId}</span>
+          ) : null}
+        </div>
+
+        <div className="status-card">
+          <span className="status-label">Entry Role</span>
+          <span
+            className={`status-value${entryRole ? '' : ' status-value--muted'}`}
+          >
+            {entryRole ?? 'None'}
+          </span>
+          <span className="status-hint">Entry history only</span>
         </div>
 
         <div className="status-card">
@@ -113,6 +235,7 @@ function App({ signalingClient, initialState } = {}) {
           >
             {negotiationDuty ?? 'None'}
           </span>
+          <span className="status-hint">Signaling-only</span>
         </div>
 
         <div
