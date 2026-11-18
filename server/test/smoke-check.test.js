@@ -1,4 +1,12 @@
-import { createServer } from 'node:http';
+import { execFile, spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createServer, request as httpRequest } from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { Server as SocketIOServer } from 'socket.io';
 import { afterEach, describe, expect, test } from 'vitest';
 import { createSignalingServer } from '../src/server.js';
@@ -9,6 +17,23 @@ import {
   runStagingSmokeChecks,
   runStagingSmokeCli,
 } from '../src/smoke-check.js';
+
+const execFileAsync = promisify(execFile);
+const SERVER_ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
+const STAGING_PROXY_HEADERS = Object.freeze({
+  'X-Shipri-Environment': 'poc-staging',
+  'X-Robots-Tag': 'noindex, nofollow',
+});
+const HOP_BY_HOP_HEADERS = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailers',
+  'transfer-encoding',
+  'upgrade',
+]);
 
 const cleanupCallbacks = new Set();
 
@@ -24,22 +49,27 @@ function createBufferWriter() {
   };
 }
 
-async function startIsolatedServer(options) {
-  const server = createSignalingServer(options);
-  cleanupCallbacks.add(() => server.close());
-
+async function listenLoopback(server) {
   await new Promise((resolve, reject) => {
-    server.httpServer.once('error', reject);
-    server.httpServer.listen(0, '127.0.0.1', () => {
-      server.httpServer.off('error', reject);
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
       resolve();
     });
   });
 
-  const address = server.httpServer.address();
+  return server.address().port;
+}
+
+async function startIsolatedServer(options) {
+  const server = createSignalingServer(options);
+  cleanupCallbacks.add(() => server.close());
+
+  const port = await listenLoopback(server.httpServer);
   return {
     ...server,
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    port,
+    baseUrl: `http://127.0.0.1:${port}`,
   };
 }
 
@@ -60,16 +90,278 @@ async function startCustomHttpServer(handler, attachSocketIO) {
       }),
   );
 
-  await new Promise((resolve, reject) => {
-    httpServer.once('error', reject);
-    httpServer.listen(0, '127.0.0.1', () => {
-      httpServer.off('error', reject);
-      resolve();
-    });
+  const port = await listenLoopback(httpServer);
+  return `http://127.0.0.1:${port}`;
+}
+
+async function createEphemeralTlsCertificate() {
+  const tempDir = await mkdtemp(join(tmpdir(), 'shipri-smoke-tls-'));
+  cleanupCallbacks.add(() => rm(tempDir, { recursive: true, force: true }));
+
+  const keyPath = join(tempDir, 'tls-key.pem');
+  const certPath = join(tempDir, 'tls-cert.pem');
+
+  await execFileAsync('openssl', [
+    'req',
+    '-x509',
+    '-newkey',
+    'rsa:2048',
+    '-nodes',
+    '-keyout',
+    keyPath,
+    '-out',
+    certPath,
+    '-days',
+    '1',
+    '-subj',
+    '/CN=127.0.0.1',
+    '-addext',
+    'subjectAltName=DNS:poc.shipri.app,DNS:localhost,IP:127.0.0.1',
+    '-addext',
+    'basicConstraints=critical,CA:TRUE',
+  ]);
+
+  const [keyPem, certPem] = await Promise.all([
+    readFile(keyPath, 'utf8'),
+    readFile(certPath, 'utf8'),
+  ]);
+
+  return { certPath, certPem, keyPem };
+}
+
+function isProxiedStagingPath(rawUrl = '/') {
+  const pathname = new URL(rawUrl, 'https://127.0.0.1').pathname;
+  return (
+    pathname === '/health' ||
+    pathname === '/socket.io' ||
+    pathname.startsWith('/socket.io/')
+  );
+}
+
+function applyStagingHeaders(res) {
+  for (const [name, value] of Object.entries(STAGING_PROXY_HEADERS)) {
+    res.setHeader(name, value);
+  }
+}
+
+function copyProxyHeaders(res, rawHeaders) {
+  for (let i = 0; i < rawHeaders.length; i += 2) {
+    const name = rawHeaders[i];
+    const value = rawHeaders[i + 1];
+    if (HOP_BY_HOP_HEADERS.has(name.toLowerCase())) {
+      continue;
+    }
+
+    const existing = res.getHeader(name);
+    if (existing === undefined) {
+      res.setHeader(name, value);
+    } else if (Array.isArray(existing)) {
+      res.setHeader(name, [...existing, value]);
+    } else {
+      res.setHeader(name, [existing, value]);
+    }
+  }
+}
+
+function proxyHttpRequest(req, res, targetPort) {
+  if (!isProxiedStagingPath(req.url)) {
+    applyStagingHeaders(res);
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Not Found');
+    return;
+  }
+
+  const forwardHeaders = { ...req.headers };
+  delete forwardHeaders.connection;
+  forwardHeaders['x-forwarded-proto'] = 'https';
+
+  const proxyReq = httpRequest(
+    {
+      hostname: '127.0.0.1',
+      port: targetPort,
+      path: req.url,
+      method: req.method,
+      headers: forwardHeaders,
+      agent: false,
+    },
+    (proxyRes) => {
+      copyProxyHeaders(res, proxyRes.rawHeaders);
+      applyStagingHeaders(res);
+      res.writeHead(proxyRes.statusCode || 502);
+      proxyRes.pipe(res);
+    },
+  );
+
+  proxyReq.on('error', (error) => {
+    if (!res.headersSent) {
+      applyStagingHeaders(res);
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(`Bad Gateway: ${error.message}`);
+      return;
+    }
+    res.destroy(error);
   });
 
-  const address = httpServer.address();
-  return `http://127.0.0.1:${address.port}`;
+  req.on('error', (error) => {
+    proxyReq.destroy(error);
+  });
+
+  req.pipe(proxyReq);
+}
+
+function proxyUpgradeSocket(req, clientSocket, head, targetPort, activeSockets) {
+  const pathname = new URL(req.url || '/', 'https://127.0.0.1').pathname;
+  if (pathname !== '/socket.io' && !pathname.startsWith('/socket.io/')) {
+    clientSocket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+    return;
+  }
+
+  const backendSocket = net.connect({ host: '127.0.0.1', port: targetPort });
+  activeSockets.add(clientSocket);
+  activeSockets.add(backendSocket);
+
+  const destroyPair = () => {
+    activeSockets.delete(clientSocket);
+    activeSockets.delete(backendSocket);
+    if (!clientSocket.destroyed) {
+      clientSocket.destroy();
+    }
+    if (!backendSocket.destroyed) {
+      backendSocket.destroy();
+    }
+  };
+
+  clientSocket.on('error', destroyPair);
+  backendSocket.on('error', destroyPair);
+  clientSocket.on('close', destroyPair);
+  backendSocket.on('close', destroyPair);
+
+  backendSocket.on('connect', () => {
+    const headerLines = [];
+    let hasForwardedProto = false;
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      const name = req.rawHeaders[i];
+      const value = req.rawHeaders[i + 1];
+      if (name.toLowerCase() === 'x-forwarded-proto') {
+        hasForwardedProto = true;
+      }
+      headerLines.push(`${name}: ${value}`);
+    }
+    if (!hasForwardedProto) {
+      headerLines.push('X-Forwarded-Proto: https');
+    }
+
+    backendSocket.write(
+      `${req.method} ${req.url} HTTP/1.1\r\n${headerLines.join('\r\n')}\r\n\r\n`,
+    );
+    if (head && head.length > 0) {
+      backendSocket.write(head);
+    }
+
+    clientSocket.pipe(backendSocket);
+    backendSocket.pipe(clientSocket);
+  });
+}
+
+async function startTlsReverseProxy({ targetPort, certPem, keyPem }) {
+  const activeSockets = new Set();
+  const httpsServer = https.createServer({ key: keyPem, cert: certPem }, (req, res) => {
+    proxyHttpRequest(req, res, targetPort);
+  });
+
+  httpsServer.on('upgrade', (req, clientSocket, head) => {
+    proxyUpgradeSocket(req, clientSocket, head, targetPort, activeSockets);
+  });
+
+  cleanupCallbacks.add(
+    () =>
+      new Promise((resolve) => {
+        for (const socket of activeSockets) {
+          socket.destroy();
+        }
+        activeSockets.clear();
+        if (typeof httpsServer.closeAllConnections === 'function') {
+          httpsServer.closeAllConnections();
+        }
+        if (!httpsServer.listening) {
+          resolve();
+          return;
+        }
+        httpsServer.close(() => resolve());
+      }),
+  );
+
+  const port = await listenLoopback(httpsServer);
+  return {
+    port,
+    baseUrl: `https://127.0.0.1:${port}`,
+  };
+}
+
+function runSmokeCliProcess(envOverrides) {
+  const childEnv = { ...process.env, ...envOverrides };
+  if (envOverrides.SMOKE_ALLOW_HTTP === undefined) {
+    delete childEnv.SMOKE_ALLOW_HTTP;
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['src/smoke-check.js'], {
+      cwd: SERVER_ROOT_DIR,
+      env: childEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+function requestHttpsJson({ port, path, ca, headers }) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path,
+        method: 'GET',
+        ca,
+        rejectUnauthorized: true,
+        headers,
+      },
+      (res) => {
+        let bodyText = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          bodyText += chunk;
+        });
+        res.on('end', () => {
+          try {
+            resolve({
+              statusCode: res.statusCode,
+              headers: res.headers,
+              body: JSON.parse(bodyText),
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
+    );
+
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 afterEach(async () => {
@@ -369,5 +661,70 @@ describe('Backend POC staging smoke checks', () => {
     });
     expect(wsExitCode).toBe(1);
     expect(stderr2.read()).toContain('[FAIL]');
+  });
+
+  test('executes smoke-check CLI end-to-end over HTTPS and WSS TLS reverse proxy with immediate room cleanup', async () => {
+    const tls = await createEphemeralTlsCertificate();
+    const server = await startIsolatedServer({
+      allowedOrigins: [
+        'https://poc.shipri.app',
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+      ],
+    });
+    const proxy = await startTlsReverseProxy({
+      targetPort: server.port,
+      certPem: tls.certPem,
+      keyPem: tls.keyPem,
+    });
+
+    const cliResult = await runSmokeCliProcess({
+      NODE_EXTRA_CA_CERTS: tls.certPath,
+      SMOKE_BASE_URL: proxy.baseUrl,
+      SMOKE_ORIGIN: 'https://poc.shipri.app',
+    });
+
+    expect(cliResult.code).toBe(0);
+    expect(cliResult.stderr).toBe('');
+    expect(cliResult.stdout).toContain('[PASS]');
+    expect(cliResult.stdout).toContain('health=ok');
+    expect(cliResult.stdout).toContain('roomsCount=0');
+    expect(cliResult.stdout).toContain('transport=websocket');
+
+    const postSmokeHealth = await requestHttpsJson({
+      port: proxy.port,
+      path: '/health',
+      ca: tls.certPem,
+      headers: { Origin: 'https://poc.shipri.app' },
+    });
+
+    expect(postSmokeHealth.statusCode).toBe(200);
+    expect(postSmokeHealth.body).toEqual({
+      status: 'ok',
+      roomsCount: 0,
+    });
+    expect(postSmokeHealth.headers['x-shipri-environment']).toBe('poc-staging');
+    expect(postSmokeHealth.headers['x-robots-tag']).toBe('noindex, nofollow');
+    expect(postSmokeHealth.headers['access-control-allow-origin']).toBe(
+      'https://poc.shipri.app',
+    );
+
+    const disallowedOriginHealth = await requestHttpsJson({
+      port: proxy.port,
+      path: '/health',
+      ca: tls.certPem,
+      headers: { Origin: 'https://shipri.app' },
+    });
+
+    expect(disallowedOriginHealth.statusCode).toBe(200);
+    expect(disallowedOriginHealth.body).toEqual({
+      status: 'ok',
+      roomsCount: 0,
+    });
+    expect(
+      disallowedOriginHealth.headers['access-control-allow-origin'],
+    ).toBeUndefined();
   });
 });
