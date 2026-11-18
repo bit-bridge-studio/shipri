@@ -86,6 +86,18 @@ interface IceCredentialsPayload {
 
 The POC response must not include TURN URLs, `username`, `credential`, `credentialType`, `TURN_SHARED_SECRET`, or any production secret. Dynamic TURN credentials are deferred to full backend development.
 
+### POC Runtime Configuration
+
+The Backend POC reads and validates runtime configuration through `server/src/config.js` during startup and server construction. Invalid configuration fails startup immediately with an explicit error message. No production or placeholder secrets are read or introduced by the Backend POC.
+
+| Variable | Local Development Default | Validation Rule |
+| :--- | :--- | :--- |
+| `PORT` | `5001` | Integer between `1` and `65535`. |
+| `ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173` | Non-empty comma-separated canonical `http://` or `https://` origins without wildcard (`*`), credentials, path, query, or fragment. |
+| `STUN_URLS` | `stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302` | Non-empty comma-separated `stun:host:port` or `stuns:host:port` endpoints with valid port `1`-`65535`. |
+
+See `server/.env.example` for the local environment template.
+
 ### POC Room Lifecycle
 
 One socket may belong to at most one active Shipri room. A room with one peer waits for another peer, and a room with two peers is full. If either connected peer leaves or disconnects, the room returns to the one-peer state and the remaining peer becomes the offerer for a future replacement. If the final peer leaves or disconnects, the backend deletes the empty room immediately.
