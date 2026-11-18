@@ -234,7 +234,7 @@ The POC deliberately differs from production in these ways:
 * Restrict CORS to the approved staging and local prototype origins (`https://poc.shipri.app` plus local dev origins, rejecting `https://shipri.app` and `*`).
 * Expose the health endpoint and document repeatable deployment smoke checks (`npm --prefix server run smoke:staging` and `curl` HTTPS `/health` + CORS checks) covering HTTPS `/health`, CORS origin verification, and Socket.IO WSS connectivity.
 * Keep TURN, `TURN_SHARED_SECRET`, production secrets, and production traffic out of the POC deployment.
-* Document deploy, update, rollback, and log-inspection commands.
+* Document initial deploy, routine update, rollback (restoring the previous working Git revision and re-running smoke checks), and privacy-safe log-inspection commands (`docker compose ... logs --tail=100 --timestamps` without exposing secrets or private signaling payloads) in Subsection 1.7 of `deployment_docker_spec.md`.
 
 **Exit criteria:**
 
