@@ -325,6 +325,109 @@ body {
   word-break: break-word;
 }
 
+.status-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.error-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.error-diagnostics-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.error-recovery-guidance {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #c3cdd8;
+  word-break: break-word;
+}
+
+.disconnect-notice {
+  background: rgba(255, 179, 0, 0.08);
+  border: 1px solid rgba(255, 179, 0, 0.32);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  color: #ffe29a;
+  word-break: break-word;
+}
+
+/* Validation and Error Scenarios */
+.validation-panel {
+  background: rgba(13, 15, 18, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.validation-panel-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.validation-panel-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.validation-panel-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #9aa7b5;
+}
+
+.scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.scenario-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  text-align: left;
+  padding: 0.75rem 0.9rem;
+}
+
+.scenario-btn-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.scenario-btn-label {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.scenario-btn-desc {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: #9aa7b5;
+  line-height: 1.35;
+}
+
 /* Chronological Event Log */
 .event-log {
   background: rgba(13, 15, 18, 0.65);
@@ -485,5 +588,13 @@ body {
 
   .event-log {
     padding: 1rem;
+  }
+
+  .validation-panel {
+    padding: 1rem;
+  }
+
+  .scenario-grid {
+    grid-template-columns: 1fr;
   }
 }
