@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 export const ROOM_ID_PATTERN = /^ship-[a-f0-9]{4}$/;
+export const PEER_ID_PATTERN = /^peer-[a-f0-9]{16}$/;
 export const MAX_ROOM_ID_ATTEMPTS = 65_536;
 
 function isPlainObject(value) {
@@ -18,6 +19,14 @@ function isPlainObject(value) {
 export function generateRoomId(randomBytesFn = randomBytes) {
   const bytes = randomBytesFn(2);
   return `ship-${bytes.toString('hex')}`;
+}
+
+/**
+ * Generates an opaque peer identifier using Node.js CSPRNG.
+ */
+export function generatePeerId(randomBytesFn = randomBytes) {
+  const bytes = randomBytesFn(8);
+  return `peer-${bytes.toString('hex')}`;
 }
 
 /**
@@ -65,6 +74,20 @@ function validatePayloadEnvelope(payload, allowedKeys, invalidMessage) {
     return {
       ok: false,
       error: createRoomError('INVALID_PAYLOAD', invalidMessage, payload.roomId),
+    };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * Validates the `room:create` payload envelope.
+ */
+export function validateRoomCreatePayload(payload) {
+  if (!isPlainObject(payload) || Object.keys(payload).length > 0) {
+    return {
+      ok: false,
+      error: createRoomError('INVALID_PAYLOAD', 'Invalid room:create payload.'),
     };
   }
 
