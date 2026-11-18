@@ -15,7 +15,15 @@ const VALID_PEER_STATES = new Set([
   'waiting_for_peer',
   'connected',
 ]);
+const VALID_ENTRY_ROLES = new Set(['creator', 'joiner']);
 const VALID_NEGOTIATION_DUTIES = new Set(['offerer', 'answerer']);
+const LIFECYCLE_SERVER_EVENTS = Object.freeze([
+  'room:created',
+  'room:joined',
+  'peer:joined',
+  'peer:left',
+  'disconnect',
+]);
 const VALID_SIGNAL_KINDS = new Set(['sdp', 'ice', 'unknown']);
 const VALID_SDP_TYPES = new Set(['offer', 'answer', 'pranswer', 'rollback']);
 const VALID_ICE_SCHEMES = new Set(['stun', 'stuns', 'turn', 'turns']);
@@ -49,6 +57,18 @@ function normalizePeerState(peerState) {
 function normalizeNegotiationDuty(duty) {
   return typeof duty === 'string' && VALID_NEGOTIATION_DUTIES.has(duty)
     ? duty
+    : null;
+}
+
+function normalizeEntryRole(entryRole) {
+  return typeof entryRole === 'string' && VALID_ENTRY_ROLES.has(entryRole)
+    ? entryRole
+    : null;
+}
+
+function normalizePeerId(peerId) {
+  return typeof peerId === 'string' && SAFE_PEER_ID_PATTERN.test(peerId)
+    ? peerId
     : null;
 }
 
@@ -152,19 +172,42 @@ function sanitizeLogMeta(meta) {
   return Object.keys(safeMeta).length > 0 ? safeMeta : undefined;
 }
 
+const OPTIONAL_LIFECYCLE_NORMALIZERS = {
+  entryRole: normalizeEntryRole,
+  selfPeerId: normalizePeerId,
+  remotePeerId: normalizePeerId,
+};
+
+function copyOptionalLifecycleFields(target, source, requireDefined) {
+  for (const [key, normalize] of Object.entries(OPTIONAL_LIFECYCLE_NORMALIZERS)) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      continue;
+    }
+    if (requireDefined && source[key] === undefined) {
+      continue;
+    }
+    target[key] = normalize(source[key]);
+  }
+  return target;
+}
+
 function ensureStateShape(state) {
   if (!isObjectRecord(state)) {
     return createInitialPrototypeState();
   }
 
-  return {
-    connectionStatus: normalizeConnectionStatus(state.connectionStatus),
-    roomId: normalizeRoomId(state.roomId),
-    peerState: normalizePeerState(state.peerState),
-    negotiationDuty: normalizeNegotiationDuty(state.negotiationDuty),
-    lastError: state.lastError ? sanitizeErrorRecord(state.lastError) : null,
-    eventLog: Array.isArray(state.eventLog) ? state.eventLog : [],
-  };
+  return copyOptionalLifecycleFields(
+    {
+      connectionStatus: normalizeConnectionStatus(state.connectionStatus),
+      roomId: normalizeRoomId(state.roomId),
+      peerState: normalizePeerState(state.peerState),
+      negotiationDuty: normalizeNegotiationDuty(state.negotiationDuty),
+      lastError: state.lastError ? sanitizeErrorRecord(state.lastError) : null,
+      eventLog: Array.isArray(state.eventLog) ? state.eventLog : [],
+    },
+    state,
+    false,
+  );
 }
 
 function extractDerivedPayload(entry) {
@@ -197,16 +240,20 @@ export function createInitialPrototypeState(overrides = {}) {
   const source = overrides ?? {};
   const rawEventLog = Array.isArray(source.eventLog) ? source.eventLog : [];
 
-  return {
-    connectionStatus: normalizeConnectionStatus(source.connectionStatus),
-    roomId: normalizeRoomId(source.roomId),
-    peerState: normalizePeerState(source.peerState),
-    negotiationDuty: normalizeNegotiationDuty(source.negotiationDuty),
-    lastError: sanitizeErrorRecord(source.lastError),
-    eventLog: rawEventLog
-      .slice(-DEFAULT_MAX_LOG_ENTRIES)
-      .map((entry) => sanitizeLogEntry(entry)),
-  };
+  return copyOptionalLifecycleFields(
+    {
+      connectionStatus: normalizeConnectionStatus(source.connectionStatus),
+      roomId: normalizeRoomId(source.roomId),
+      peerState: normalizePeerState(source.peerState),
+      negotiationDuty: normalizeNegotiationDuty(source.negotiationDuty),
+      lastError: sanitizeErrorRecord(source.lastError),
+      eventLog: rawEventLog
+        .slice(-DEFAULT_MAX_LOG_ENTRIES)
+        .map((entry) => sanitizeLogEntry(entry)),
+    },
+    source,
+    true,
+  );
 }
 
 /**
@@ -346,6 +393,199 @@ export function clearEventLog(state) {
 }
 
 /**
+ * Resets active room and peer membership fields back to unaffiliated while preserving eventLog.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ */
+export function resetRoomMembership(state) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  return {
+    ...baseState,
+    roomId: null,
+    peerState: 'unaffiliated',
+    entryRole: null,
+    negotiationDuty: null,
+    selfPeerId: null,
+    remotePeerId: null,
+  };
+}
+
+/**
+ * Transitions an unaffiliated creator into waiting_for_peer upon receiving room:created.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {unknown} payload
+ */
+export function applyRoomCreated(state, payload) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  if (!isObjectRecord(payload)) {
+    return { ...baseState };
+  }
+
+  const roomId = normalizeRoomId(payload.roomId);
+  if (!roomId) {
+    return { ...baseState };
+  }
+
+  return {
+    ...baseState,
+    roomId,
+    peerState: 'waiting_for_peer',
+    entryRole: 'creator',
+    negotiationDuty:
+      normalizeNegotiationDuty(payload.negotiationDuty) ?? 'offerer',
+    selfPeerId: normalizePeerId(payload.peerId),
+    remotePeerId: null,
+  };
+}
+
+/**
+ * Transitions an unaffiliated joiner into connected state upon receiving room:joined.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {unknown} payload
+ */
+export function applyRoomJoined(state, payload) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  if (!isObjectRecord(payload)) {
+    return { ...baseState };
+  }
+
+  const roomId = normalizeRoomId(payload.roomId);
+  if (!roomId) {
+    return { ...baseState };
+  }
+
+  return {
+    ...baseState,
+    roomId,
+    peerState: 'connected',
+    entryRole: 'joiner',
+    negotiationDuty:
+      normalizeNegotiationDuty(payload.negotiationDuty) ?? 'answerer',
+    selfPeerId: normalizePeerId(payload.peerId),
+    remotePeerId: null,
+  };
+}
+
+/**
+ * Transitions the waiting peer in the matching room into connected state when a peer joins.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {unknown} payload
+ */
+export function applyPeerJoined(state, payload) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  if (!isObjectRecord(payload)) {
+    return { ...baseState };
+  }
+
+  const roomId = normalizeRoomId(payload.roomId);
+  if (!roomId || baseState.roomId !== roomId) {
+    return { ...baseState };
+  }
+
+  return {
+    ...baseState,
+    peerState: 'connected',
+    negotiationDuty: baseState.negotiationDuty ?? 'offerer',
+    remotePeerId: normalizePeerId(payload.peerId),
+  };
+}
+
+/**
+ * Keeps the remaining peer in waiting_for_peer and promotes it to offerer when the remote peer leaves.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {unknown} payload
+ */
+export function applyPeerLeft(state, payload) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  if (!isObjectRecord(payload)) {
+    return { ...baseState };
+  }
+
+  const roomId = normalizeRoomId(payload.roomId);
+  if (!roomId || baseState.roomId !== roomId) {
+    return { ...baseState };
+  }
+
+  // Regardless of initial entryRole, the remaining peer becomes offerer for the next peer.
+  return {
+    ...baseState,
+    peerState: 'waiting_for_peer',
+    negotiationDuty: 'offerer',
+    remotePeerId: null,
+  };
+}
+
+/**
+ * Resets local room membership when the local peer explicitly emits room:leave.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {string | { roomId?: unknown }} [targetRoomId]
+ */
+export function applyLocalRoomLeave(state, targetRoomId) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  const requestedRoomId =
+    typeof targetRoomId === 'string'
+      ? targetRoomId.trim()
+      : isObjectRecord(targetRoomId) &&
+          Object.prototype.hasOwnProperty.call(targetRoomId, 'roomId')
+        ? typeof targetRoomId.roomId === 'string'
+          ? targetRoomId.roomId.trim()
+          : null
+        : undefined;
+
+  if (
+    requestedRoomId !== undefined &&
+    baseState.roomId !== null &&
+    requestedRoomId !== baseState.roomId
+  ) {
+    return { ...baseState };
+  }
+
+  return resetRoomMembership(baseState);
+}
+
+const SERVER_EVENT_REDUCERS = {
+  'room:created': applyRoomCreated,
+  'room:joined': applyRoomJoined,
+  'peer:joined': applyPeerJoined,
+  'peer:left': applyPeerLeft,
+  disconnect: (currentState) => resetRoomMembership(currentState),
+};
+
+/**
+ * Applies a normalized room lifecycle server or disconnect event onto diagnostic state.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {string} eventName
+ * @param {unknown} [payload]
+ */
+export function applySignalingServerEvent(state, eventName, payload) {
+  if (typeof eventName === 'string') {
+    const reducer = SERVER_EVENT_REDUCERS[eventName];
+    if (reducer) {
+      return reducer(state, payload);
+    }
+  }
+
+  return state ? ensureStateShape(state) : createInitialPrototypeState();
+}
+
+/**
  * Applies a signaling client status snapshot onto diagnostic shell state with sanitized errors.
  * @param {ReturnType<typeof createInitialPrototypeState>} state
  * @param {unknown} statusSnapshot
@@ -381,16 +621,31 @@ export function applyConnectionStatus(state, statusSnapshot) {
     ? sanitizeErrorRecord(statusSnapshot.lastError)
     : baseState.lastError;
 
-  return {
+  const nextState = {
     ...baseState,
     connectionStatus: nextStatus,
     lastError: nextLastError,
   };
+
+  const hasDisconnectReason =
+    typeof statusSnapshot.disconnectReason === 'string' &&
+    statusSnapshot.disconnectReason.trim() !== '';
+
+  if (nextStatus === 'disconnected' && hasDisconnectReason) {
+    return resetRoomMembership(nextState);
+  }
+
+  return nextState;
 }
 
 /**
- * Connects a signaling client status and event stream to a React-compatible state updater.
- * @param {{ getStatus: Function, subscribeStatus: Function, subscribeEvents?: Function }} signalingClient
+ * Connects a signaling client status, event, and room lifecycle stream to a state updater.
+ * @param {{
+ *   getStatus: Function,
+ *   subscribeStatus: Function,
+ *   subscribeEvents?: Function,
+ *   subscribeServerEvent?: Function,
+ * }} signalingClient
  * @param {Function} setState
  * @returns {() => void} Cleanup callback that unsubscribes all listeners.
  */
@@ -410,12 +665,74 @@ export function bindSignalingClient(signalingClient, setState) {
   const unsubscribeEvents =
     typeof signalingClient.subscribeEvents === 'function'
       ? signalingClient.subscribeEvents((entry) => {
-          setState((prev) => appendSanitizedLogEntry(prev, entry));
+          setState((prev) => {
+            const withLog = appendSanitizedLogEntry(prev, entry);
+            return entry?.event === 'disconnect'
+              ? resetRoomMembership(withLog)
+              : withLog;
+          });
         })
       : () => {};
+
+  const unsubscribeServerEvents =
+    typeof signalingClient.subscribeServerEvent === 'function'
+      ? LIFECYCLE_SERVER_EVENTS.map((eventName) =>
+          signalingClient.subscribeServerEvent(eventName, (payload) => {
+            setState((prev) =>
+              applySignalingServerEvent(prev, eventName, payload),
+            );
+          }),
+        )
+      : [];
 
   return () => {
     unsubscribeStatus();
     unsubscribeEvents();
+    for (const unsubscribe of unsubscribeServerEvents) {
+      unsubscribe();
+    }
   };
+}
+
+/**
+ * Creates room lifecycle control actions bound to a signaling client and React-compatible updater.
+ * @param {{ createRoom: Function, joinRoom: Function, leaveRoom: Function }} signalingClient
+ * @param {Function} setState
+ */
+export function createRoomLifecycleActions(signalingClient, setState) {
+  if (!signalingClient || typeof setState !== 'function') {
+    throw new TypeError(
+      'Expected signalingClient and setState function to create room lifecycle actions.',
+    );
+  }
+
+  function createRoom() {
+    signalingClient.createRoom();
+    return true;
+  }
+
+  function joinRoom(rawRoomId) {
+    const roomId = typeof rawRoomId === 'string' ? rawRoomId.trim() : '';
+    if (!roomId) {
+      return false;
+    }
+    signalingClient.joinRoom(roomId);
+    return true;
+  }
+
+  function leaveRoom(activeRoomId) {
+    const roomId = typeof activeRoomId === 'string' ? activeRoomId.trim() : '';
+    if (!roomId) {
+      return false;
+    }
+    signalingClient.leaveRoom(roomId);
+    setState((prev) => applyLocalRoomLeave(prev, roomId));
+    return true;
+  }
+
+  return Object.freeze({
+    createRoom,
+    joinRoom,
+    leaveRoom,
+  });
 }
