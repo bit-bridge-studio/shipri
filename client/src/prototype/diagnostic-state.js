@@ -22,6 +22,7 @@ const LIFECYCLE_SERVER_EVENTS = Object.freeze([
   'room:joined',
   'peer:joined',
   'peer:left',
+  'room:error',
   'disconnect',
 ]);
 const VALID_SIGNAL_KINDS = new Set(['sdp', 'ice', 'unknown']);
@@ -109,6 +110,20 @@ function sanitizeErrorRecord(errorLike) {
     message,
     ...(timestamp ? { timestamp } : {}),
   };
+}
+
+function isSameErrorRecord(first, second) {
+  if (!first || !second) {
+    return first === second;
+  }
+
+  return (
+    first.source === second.source &&
+    first.code === second.code &&
+    first.roomId === second.roomId &&
+    first.message === second.message &&
+    first.timestamp === second.timestamp
+  );
 }
 
 function sanitizeLogMeta(meta) {
@@ -440,6 +455,7 @@ export function applyRoomCreated(state, payload) {
       normalizeNegotiationDuty(payload.negotiationDuty) ?? 'offerer',
     selfPeerId: normalizePeerId(payload.peerId),
     remotePeerId: null,
+    lastError: null,
   };
 }
 
@@ -471,6 +487,7 @@ export function applyRoomJoined(state, payload) {
       normalizeNegotiationDuty(payload.negotiationDuty) ?? 'answerer',
     selfPeerId: normalizePeerId(payload.peerId),
     remotePeerId: null,
+    lastError: null,
   };
 }
 
@@ -560,11 +577,121 @@ export function applyLocalRoomLeave(state, targetRoomId) {
   return resetRoomMembership(baseState);
 }
 
+/**
+ * Records a sanitized room:error payload on lastError without altering active room membership.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {unknown} payload
+ */
+export function applyRoomError(state, payload) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  const errorInput = isObjectRecord(payload)
+    ? {
+        ...payload,
+        source: 'room:error',
+        code:
+          typeof payload.code === 'string' && payload.code.trim() !== ''
+            ? payload.code
+            : 'UNKNOWN_ERROR',
+        message:
+          typeof payload.message === 'string' && payload.message.trim() !== ''
+            ? payload.message
+            : typeof payload.error === 'string' && payload.error.trim() !== ''
+              ? payload.error
+              : 'Unknown room error',
+      }
+    : {
+        source: 'room:error',
+        code: 'UNKNOWN_ERROR',
+        message:
+          sanitizeTextValue(payload, { maxLength: 160 }) ||
+          'Unknown room error',
+      };
+
+  const sanitizedError = sanitizeErrorRecord(errorInput);
+
+  if (
+    sanitizedError &&
+    !sanitizedError.timestamp &&
+    baseState.lastError?.source === 'room:error' &&
+    baseState.lastError.code === sanitizedError.code &&
+    baseState.lastError.message === sanitizedError.message &&
+    baseState.lastError.roomId === sanitizedError.roomId &&
+    baseState.lastError.timestamp
+  ) {
+    sanitizedError.timestamp = baseState.lastError.timestamp;
+  }
+
+  return {
+    ...baseState,
+    lastError: sanitizedError,
+  };
+}
+
+/**
+ * Clears only lastError while preserving connection status, room membership, and eventLog.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ */
+export function clearLastError(state) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  return {
+    ...baseState,
+    lastError: null,
+  };
+}
+
+/**
+ * Returns true when selective error recovery should also clear an unaffiliated draft room input.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ */
+export function shouldClearDraftRoomInput(state) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  if (baseState.peerState !== 'unaffiliated' || !baseState.lastError) {
+    return false;
+  }
+
+  return (
+    baseState.lastError.source !== 'connect_error' &&
+    baseState.lastError.code !== 'CONNECT_ERROR'
+  );
+}
+
+/**
+ * Selectively recovers from an error by clearing only lastError (and optional draft room input
+ * when unaffiliated) without clearing valid active room membership or sanitized eventLog.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {{ onClearDraft?: Function }} [options]
+ */
+export function recoverErrorState(state, options = {}) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  if (
+    isObjectRecord(options) &&
+    typeof options.onClearDraft === 'function' &&
+    shouldClearDraftRoomInput(baseState)
+  ) {
+    options.onClearDraft();
+  }
+
+  return clearLastError(baseState);
+}
+
 const SERVER_EVENT_REDUCERS = {
   'room:created': applyRoomCreated,
   'room:joined': applyRoomJoined,
   'peer:joined': applyPeerJoined,
   'peer:left': applyPeerLeft,
+  'room:error': applyRoomError,
   disconnect: (currentState) => resetRoomMembership(currentState),
 };
 
@@ -656,10 +783,36 @@ export function bindSignalingClient(signalingClient, setState) {
     );
   }
 
-  setState((prev) => applyConnectionStatus(prev, signalingClient.getStatus()));
+  let lastDeliveredStatusError = null;
+
+  function applyBoundStatusSnapshot(nextStatus) {
+    const normalizedStatus = isObjectRecord(nextStatus)
+      ? normalizeConnectionStatus(nextStatus.status)
+      : 'disconnected';
+    const sanitizedIncomingError = isObjectRecord(nextStatus)
+      ? sanitizeErrorRecord(nextStatus.lastError)
+      : null;
+
+    if (
+      isObjectRecord(nextStatus) &&
+      normalizedStatus !== 'error' &&
+      sanitizedIncomingError !== null &&
+      isSameErrorRecord(sanitizedIncomingError, lastDeliveredStatusError)
+    ) {
+      const { lastError: _ignoredLastError, ...statusWithoutStaleError } =
+        nextStatus;
+      setState((prev) => applyConnectionStatus(prev, statusWithoutStaleError));
+      return;
+    }
+
+    lastDeliveredStatusError = sanitizedIncomingError;
+    setState((prev) => applyConnectionStatus(prev, nextStatus));
+  }
+
+  applyBoundStatusSnapshot(signalingClient.getStatus());
 
   const unsubscribeStatus = signalingClient.subscribeStatus((nextStatus) => {
-    setState((prev) => applyConnectionStatus(prev, nextStatus));
+    applyBoundStatusSnapshot(nextStatus);
   });
 
   const unsubscribeEvents =
