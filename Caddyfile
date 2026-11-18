@@ -1,8 +1,12 @@
-# Caddy Configuration for Shipri
+# Caddy Configuration for Shipri Backend POC Staging
 
-# Local development or general HTTP entry
-:80 {
-    # 1. Route Socket.io WebSocket connections
+{$CADDY_SITE_ADDRESS:poc.shipri.app} {
+    header {
+        X-Shipri-Environment "poc-staging"
+        X-Robots-Tag "noindex, nofollow"
+    }
+
+    # 1. Route Socket.IO HTTP polling and WSS WebSocket traffic
     reverse_proxy /socket.io/* server:5001
 
     # 2. Route HTTP health checks
@@ -11,10 +15,3 @@
     # 3. Route all other requests to the static SPA client
     reverse_proxy * client:80
 }
-
-# Production Domain Configuration (Uncomment and replace with your domain)
-# shipri.app {
-#     reverse_proxy /socket.io/* server:5001
-#     reverse_proxy /health server:5001
-#     reverse_proxy * client:80
-# }
