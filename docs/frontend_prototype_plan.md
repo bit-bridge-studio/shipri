@@ -13,6 +13,8 @@ Frontend prototype implementation starts only when:
 * The POC server starts locally and is reachable through the documented staging HTTPS/WSS endpoint.
 * The minimum room, signaling, disconnect, error, and development ICE contract is frozen.
 
+**Gate Status (`BP-6`):** The frozen Backend POC contract and local/staging prototype connection instructions are defined in `backend_poc_plan.md` Section `3`, and completed `BP-6` evidence (`206` passing server tests, syntax/startup/Compose checks, TLS-terminated HTTPS/WSS `smoke:staging` verification, and staging VPS `deploy.yml` run `44228702186`) is recorded in `backend_poc_plan.md` Section `6`. Public DNS for `poc.shipri.app` (`dig +short A poc.shipri.app`) still awaits DNS `A`-record and host proxy assignment (`fetch failed` externally), so re-running `npm --prefix server run smoke:staging` against `https://poc.shipri.app` after DNS setup completes external host validation per `deployment_docker_spec.md` Subsection `1.7`.
+
 Mocks may be used in frontend unit tests, but they must not replace the accepted Backend POC for prototype integration behavior.
 
 ---
