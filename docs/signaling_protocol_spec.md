@@ -450,6 +450,8 @@ An error does not mutate room or socket membership. The server emits `room:error
 ## 4. Server Memory Schema
 
 ```typescript
+type RoomId = string;
+
 // In-memory backend record for one connected room member.
 interface RoomPeer {
   // Opaque peer identifier exposed to the other room member.
@@ -465,7 +467,7 @@ interface RoomPeer {
 // In-memory room record used by the signaling backend.
 interface Room {
   // Canonical room identifier.
-  roomId: string;
+  roomId: RoomId;
 
   // Active connected peers. Capacity is exactly two.
   peers: RoomPeer[];
@@ -476,7 +478,15 @@ interface Room {
   // Production-only millisecond expiry timestamp. Omitted by the Backend POC.
   expiresAt?: number;
 }
+
+// Primary in-memory room store keyed by canonical roomId.
+type RoomStore = Map<RoomId, Room>;
+
+// Reverse socket-to-room index for O(1) membership and disconnect lookups.
+type SocketRoomIndex = Map<string, RoomId>;
 ```
+
+`activeRooms` (`RoomStore`) and `socketRooms` (`SocketRoomIndex`) remain synchronized across every valid `room:create`, `room:join`, `room:leave`, `disconnect`, and room-deletion transition, while rejected operations leave both maps unchanged. Disconnect cleanup and active-membership checks resolve a socket's room through `socketRooms` without scanning unrelated entries in `activeRooms`, and both maps are cleared when the server closes.
 
 The backend stores no file-board or transfer state.
 

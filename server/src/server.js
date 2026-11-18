@@ -13,18 +13,44 @@ import {
   validateSignalForwardPayload,
 } from './room-id.js';
 
-function hasActiveRoomMembership(activeRooms, socketId) {
-  for (const room of activeRooms.values()) {
-    if (room.peers.some((peer) => peer.socketId === socketId)) {
-      return true;
-    }
+function findSocketMembership(activeRooms, socketRooms, socketId) {
+  const roomId = socketRooms.get(socketId);
+  if (!roomId) {
+    return null;
   }
 
-  return false;
+  const room = activeRooms.get(roomId);
+  if (!room) {
+    socketRooms.delete(socketId);
+    return null;
+  }
+
+  const peerIndex = room.peers.findIndex(
+    (peer) => peer.socketId === socketId,
+  );
+  if (peerIndex === -1) {
+    socketRooms.delete(socketId);
+    return null;
+  }
+
+  return { room, peerIndex };
 }
 
-function removePeerFromRoom(io, activeRooms, room, peerIndex, socket, reason) {
+function hasActiveRoomMembership(activeRooms, socketRooms, socketId) {
+  return findSocketMembership(activeRooms, socketRooms, socketId) !== null;
+}
+
+function removePeerFromRoom(
+  io,
+  activeRooms,
+  socketRooms,
+  room,
+  peerIndex,
+  socket,
+  reason,
+) {
   const [removedPeer] = room.peers.splice(peerIndex, 1);
+  socketRooms.delete(removedPeer.socketId);
   socket.leave(room.roomId);
 
   if (room.peers.length === 0) {
@@ -63,6 +89,8 @@ export function createSignalingServer(options = {}) {
 
   // Memory schema: Map<roomId, { roomId, peers, createdAt }>
   const activeRooms = new Map();
+  // Reverse index: Map<socketId, roomId> for O(1) membership and disconnect lookup
+  const socketRooms = new Map();
 
   app.get('/health', (_req, res) => {
     res.set('Cache-Control', 'no-store');
@@ -83,7 +111,7 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      if (hasActiveRoomMembership(activeRooms, socket.id)) {
+      if (hasActiveRoomMembership(activeRooms, socketRooms, socket.id)) {
         socket.emit(
           'room:error',
           createRoomError(
@@ -111,6 +139,7 @@ export function createSignalingServer(options = {}) {
       };
 
       activeRooms.set(roomId, room);
+      socketRooms.set(socket.id, roomId);
       socket.join(roomId);
 
       console.log(`Room created: ${roomId}`);
@@ -144,7 +173,7 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      if (hasActiveRoomMembership(activeRooms, socket.id)) {
+      if (hasActiveRoomMembership(activeRooms, socketRooms, socket.id)) {
         socket.emit(
           'room:error',
           createRoomError(
@@ -177,6 +206,7 @@ export function createSignalingServer(options = {}) {
         socketId: socket.id,
         joinedAt: now,
       });
+      socketRooms.set(socket.id, roomId);
       socket.join(roomId);
 
       console.log(`Peer joined room: ${roomId}`);
@@ -214,9 +244,11 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      const peerIndex = room.peers.findIndex(
-        (peer) => peer.socketId === socket.id,
-      );
+      const indexedRoomId = socketRooms.get(socket.id);
+      const peerIndex =
+        indexedRoomId === roomId
+          ? room.peers.findIndex((peer) => peer.socketId === socket.id)
+          : -1;
       if (peerIndex === -1) {
         socket.emit(
           'room:error',
@@ -229,7 +261,15 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      removePeerFromRoom(io, activeRooms, room, peerIndex, socket, 'leave');
+      removePeerFromRoom(
+        io,
+        activeRooms,
+        socketRooms,
+        room,
+        peerIndex,
+        socket,
+        'leave',
+      );
     });
 
     // 4. Forward WebRTC signaling candidates/SDP
@@ -261,23 +301,24 @@ export function createSignalingServer(options = {}) {
     socket.on('disconnect', () => {
       console.log(`Socket disconnected: ${socket.id}`);
 
-      for (const room of activeRooms.values()) {
-        const peerIndex = room.peers.findIndex(
-          (peer) => peer.socketId === socket.id,
-        );
-        if (peerIndex === -1) {
-          continue;
-        }
-
-        removePeerFromRoom(
-          io,
-          activeRooms,
-          room,
-          peerIndex,
-          socket,
-          'disconnect',
-        );
+      const membership = findSocketMembership(
+        activeRooms,
+        socketRooms,
+        socket.id,
+      );
+      if (!membership) {
+        return;
       }
+
+      removePeerFromRoom(
+        io,
+        activeRooms,
+        socketRooms,
+        membership.room,
+        membership.peerIndex,
+        socket,
+        'disconnect',
+      );
     });
   });
 
@@ -285,11 +326,15 @@ export function createSignalingServer(options = {}) {
     return new Promise((resolve, reject) => {
       if (!httpServer.listening) {
         io.disconnectSockets(true);
+        activeRooms.clear();
+        socketRooms.clear();
         resolve();
         return;
       }
 
       io.close((error) => {
+        activeRooms.clear();
+        socketRooms.clear();
         if (error) {
           reject(error);
           return;
@@ -304,6 +349,8 @@ export function createSignalingServer(options = {}) {
     httpServer,
     io,
     config,
+    activeRooms,
+    socketRooms,
     close,
   };
 }
