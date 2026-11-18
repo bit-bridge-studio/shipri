@@ -65,7 +65,7 @@ graph TD
 
 The POC implements local server startup, health, basic room lifecycle, membership-safe signaling relay, disconnect cleanup, development STUN configuration, and a restricted HTTPS/WSS staging deployment. It explicitly excludes production authorization, TURN, abuse controls, and production deployment hardening.
 
-**Gate:** automated tests pass, staging HTTPS/WSS checks pass, and the POC contract is frozen for the frontend prototype.
+**Gate:** automated tests pass, TLS-terminated HTTPS/WSS smoke checks pass, and the POC contract is frozen for the frontend prototype. (`BP-6` acceptance evidence, covering `206` passing server tests, TLS-terminated HTTPS/WSS `smoke:staging` verification, and staging VPS `deploy.yml` run `44228702186`, is recorded in `backend_poc_plan.md` Section `6`; public DNS for `poc.shipri.app` still awaits `A`-record and host proxy assignment, after which `npm --prefix server run smoke:staging` against `https://poc.shipri.app` completes external host validation per `deployment_docker_spec.md` Subsection `1.7`.)
 
 ### Part 2: Frontend Prototype for Backend Testing
 
@@ -120,4 +120,4 @@ Each implementation stage follows TDD:
 4. Run stage-specific checks.
 5. Update documentation when behavior or limitations change.
 
-The immediate next step is to resolve the backend POC contract, then begin Part 1.
+The Backend POC implementation and `BP-6` acceptance evidence (`206` passing tests, TLS-terminated HTTPS/WSS `smoke:staging` verification, and staging VPS `deploy.yml` run `44228702186`) are recorded in `backend_poc_plan.md` Section `6` and synchronized with `frontend_prototype_plan.md` Section `4` (`FP-0`), unblocking Part 2 (`frontend_prototype_plan.md`) local prototype development while external host validation (`npm --prefix server run smoke:staging` against `https://poc.shipri.app`) awaits public DNS `A`-record and host proxy assignment per `deployment_docker_spec.md` Subsection `1.7`.
