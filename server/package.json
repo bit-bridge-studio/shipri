@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
+    "smoke:staging": "node src/smoke-check.js",
     "test": "vitest run"
   },
   "dependencies": {
