@@ -3,6 +3,10 @@ import {
   sanitizeEventPayloadSummary,
   sanitizeTextValue,
 } from '../signaling/socket-client.js';
+import {
+  createInitialIceDiagnosticsState,
+  validateIceCredentialsPayload,
+} from './ice-diagnostics.js';
 
 const VALID_CONNECTION_STATUSES = new Set([
   'disconnected',
@@ -22,6 +26,7 @@ const LIFECYCLE_SERVER_EVENTS = Object.freeze([
   'room:joined',
   'peer:joined',
   'peer:left',
+  'ice:credentials',
   'room:error',
   'disconnect',
 ]);
@@ -187,10 +192,21 @@ function sanitizeLogMeta(meta) {
   return Object.keys(safeMeta).length > 0 ? safeMeta : undefined;
 }
 
+function normalizeIceDiagnostics(value) {
+  if (value === null) {
+    return null;
+  }
+  if (!isObjectRecord(value)) {
+    return createInitialIceDiagnosticsState();
+  }
+  return createInitialIceDiagnosticsState(value);
+}
+
 const OPTIONAL_LIFECYCLE_NORMALIZERS = {
   entryRole: normalizeEntryRole,
   selfPeerId: normalizePeerId,
   remotePeerId: normalizePeerId,
+  iceDiagnostics: normalizeIceDiagnostics,
 };
 
 function copyOptionalLifecycleFields(target, source, requireDefined) {
@@ -415,6 +431,10 @@ export function resetRoomMembership(state) {
   const baseState = state
     ? ensureStateShape(state)
     : createInitialPrototypeState();
+  const hasIceDiagnostics = Object.prototype.hasOwnProperty.call(
+    baseState,
+    'iceDiagnostics',
+  );
 
   return {
     ...baseState,
@@ -424,6 +444,14 @@ export function resetRoomMembership(state) {
     negotiationDuty: null,
     selfPeerId: null,
     remotePeerId: null,
+    ...(hasIceDiagnostics
+      ? {
+          iceDiagnostics:
+            baseState.iceDiagnostics === null
+              ? null
+              : createInitialIceDiagnosticsState(),
+        }
+      : {}),
   };
 }
 
@@ -446,6 +474,11 @@ export function applyRoomCreated(state, payload) {
     return { ...baseState };
   }
 
+  const hasIceDiagnostics = Object.prototype.hasOwnProperty.call(
+    baseState,
+    'iceDiagnostics',
+  );
+
   return {
     ...baseState,
     roomId,
@@ -456,6 +489,14 @@ export function applyRoomCreated(state, payload) {
     selfPeerId: normalizePeerId(payload.peerId),
     remotePeerId: null,
     lastError: null,
+    ...(hasIceDiagnostics
+      ? {
+          iceDiagnostics:
+            baseState.iceDiagnostics === null
+              ? null
+              : createInitialIceDiagnosticsState(),
+        }
+      : {}),
   };
 }
 
@@ -478,6 +519,11 @@ export function applyRoomJoined(state, payload) {
     return { ...baseState };
   }
 
+  const hasIceDiagnostics = Object.prototype.hasOwnProperty.call(
+    baseState,
+    'iceDiagnostics',
+  );
+
   return {
     ...baseState,
     roomId,
@@ -488,6 +534,14 @@ export function applyRoomJoined(state, payload) {
     selfPeerId: normalizePeerId(payload.peerId),
     remotePeerId: null,
     lastError: null,
+    ...(hasIceDiagnostics
+      ? {
+          iceDiagnostics:
+            baseState.iceDiagnostics === null
+              ? null
+              : createInitialIceDiagnosticsState(),
+        }
+      : {}),
   };
 }
 
@@ -578,6 +632,89 @@ export function applyLocalRoomLeave(state, targetRoomId) {
 }
 
 /**
+ * Marks development ICE configuration diagnostics as loading for the target canonical room.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {string | { roomId?: unknown }} [targetRoomId]
+ */
+export function applyIceRequestStarted(state, targetRoomId) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  const requestedRoomId =
+    targetRoomId === undefined
+      ? baseState.roomId
+      : normalizeRoomId(
+          typeof targetRoomId === 'string'
+            ? targetRoomId.trim()
+            : isObjectRecord(targetRoomId)
+              ? targetRoomId.roomId
+              : null,
+        );
+
+  if (!requestedRoomId) {
+    return { ...baseState };
+  }
+
+  return {
+    ...baseState,
+    iceDiagnostics: createInitialIceDiagnosticsState({
+      status: 'loading',
+      roomId: requestedRoomId,
+      lastError: null,
+    }),
+  };
+}
+
+/**
+ * Validates an inbound ice:credentials payload and updates iceDiagnostics with a sanitized
+ * STUN-only summary or INVALID_ICE_CREDENTIALS failure without dropping room membership.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {unknown} payload
+ */
+export function applyIceCredentials(state, payload) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  const validation = validateIceCredentialsPayload(payload, {
+    expectedRoomId: baseState.roomId ?? undefined,
+  });
+
+  if (!validation.ok) {
+    const errorRoomId =
+      validation.error.roomId ?? baseState.roomId ?? undefined;
+    const sanitizedError = sanitizeErrorRecord({
+      source: 'ice:credentials',
+      code: validation.error.code,
+      ...(errorRoomId ? { roomId: errorRoomId } : {}),
+      message: validation.error.message,
+    });
+
+    return {
+      ...baseState,
+      lastError: sanitizedError,
+      iceDiagnostics: createInitialIceDiagnosticsState({
+        status: 'invalid',
+        roomId: baseState.roomId ?? validation.error.roomId ?? null,
+        lastError: sanitizedError,
+      }),
+    };
+  }
+
+  return {
+    ...baseState,
+    lastError: null,
+    iceDiagnostics: createInitialIceDiagnosticsState({
+      status: 'ready',
+      roomId: validation.roomId,
+      ...validation.summary,
+      lastError: null,
+    }),
+  };
+}
+
+/**
  * Records a sanitized room:error payload on lastError without altering active room membership.
  * @param {ReturnType<typeof createInitialPrototypeState>} state
  * @param {unknown} payload
@@ -624,9 +761,26 @@ export function applyRoomError(state, payload) {
     sanitizedError.timestamp = baseState.lastError.timestamp;
   }
 
+  const shouldUpdateIceError =
+    baseState.iceDiagnostics?.status === 'loading' ||
+    sanitizedError?.code === 'SERVER_BUSY';
+
   return {
     ...baseState,
     lastError: sanitizedError,
+    ...(shouldUpdateIceError
+      ? {
+          iceDiagnostics: createInitialIceDiagnosticsState({
+            status: 'error',
+            roomId:
+              sanitizedError?.roomId ??
+              baseState.iceDiagnostics?.roomId ??
+              baseState.roomId ??
+              null,
+            lastError: sanitizedError,
+          }),
+        }
+      : {}),
   };
 }
 
@@ -638,10 +792,21 @@ export function clearLastError(state) {
   const baseState = state
     ? ensureStateShape(state)
     : createInitialPrototypeState();
+  const hasIceDiagnosticsError =
+    Boolean(baseState.iceDiagnostics) &&
+    baseState.iceDiagnostics.lastError !== null;
 
   return {
     ...baseState,
     lastError: null,
+    ...(hasIceDiagnosticsError
+      ? {
+          iceDiagnostics: {
+            ...baseState.iceDiagnostics,
+            lastError: null,
+          },
+        }
+      : {}),
   };
 }
 
@@ -691,6 +856,7 @@ const SERVER_EVENT_REDUCERS = {
   'room:joined': applyRoomJoined,
   'peer:joined': applyPeerJoined,
   'peer:left': applyPeerLeft,
+  'ice:credentials': applyIceCredentials,
   'room:error': applyRoomError,
   disconnect: (currentState) => resetRoomMembership(currentState),
 };
@@ -820,9 +986,17 @@ export function bindSignalingClient(signalingClient, setState) {
       ? signalingClient.subscribeEvents((entry) => {
           setState((prev) => {
             const withLog = appendSanitizedLogEntry(prev, entry);
-            return entry?.event === 'disconnect'
-              ? resetRoomMembership(withLog)
-              : withLog;
+            if (entry?.event === 'disconnect') {
+              return resetRoomMembership(withLog);
+            }
+            if (
+              entry?.direction === 'outbound' &&
+              entry?.event === 'ice:get' &&
+              entry?.roomId
+            ) {
+              return applyIceRequestStarted(withLog, entry.roomId);
+            }
+            return withLog;
           });
         })
       : () => {};
@@ -849,7 +1023,7 @@ export function bindSignalingClient(signalingClient, setState) {
 
 /**
  * Creates room lifecycle control actions bound to a signaling client and React-compatible updater.
- * @param {{ createRoom: Function, joinRoom: Function, leaveRoom: Function }} signalingClient
+ * @param {{ createRoom: Function, joinRoom: Function, leaveRoom: Function, requestIce?: Function }} signalingClient
  * @param {Function} setState
  */
 export function createRoomLifecycleActions(signalingClient, setState) {
@@ -883,9 +1057,22 @@ export function createRoomLifecycleActions(signalingClient, setState) {
     return true;
   }
 
+  function requestIce(activeRoomId) {
+    const roomId = normalizeRoomId(
+      typeof activeRoomId === 'string' ? activeRoomId.trim() : '',
+    );
+    if (!roomId) {
+      return false;
+    }
+    signalingClient.requestIce(roomId);
+    setState((prev) => applyIceRequestStarted(prev, roomId));
+    return true;
+  }
+
   return Object.freeze({
     createRoom,
     joinRoom,
     leaveRoom,
+    requestIce,
   });
 }

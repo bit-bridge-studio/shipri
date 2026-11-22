@@ -91,6 +91,18 @@ export const POC_ROOM_ERROR_DESCRIPTORS = Object.freeze({
   }),
 });
 
+const CLIENT_DIAGNOSTIC_ERROR_DESCRIPTORS = Object.freeze({
+  INVALID_ICE_CREDENTIALS: Object.freeze({
+    code: 'INVALID_ICE_CREDENTIALS',
+    category: 'validation',
+    title: 'Invalid ICE configuration',
+    recoveryGuidance:
+      'Verify the signaling server STUN configuration and request ICE configuration again.',
+    preservesMembership: true,
+    known: true,
+  }),
+});
+
 function isObjectRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -118,14 +130,23 @@ export function resolveRoomErrorDescriptor(errorOrCode) {
   }
 
   const normalizedCode = sanitizeTextValue(rawCode, { maxLength: 64 }).trim();
-  if (
-    normalizedCode !== '' &&
-    Object.prototype.hasOwnProperty.call(
-      POC_ROOM_ERROR_DESCRIPTORS,
-      normalizedCode,
-    )
-  ) {
-    return POC_ROOM_ERROR_DESCRIPTORS[normalizedCode];
+  if (normalizedCode !== '') {
+    if (
+      Object.prototype.hasOwnProperty.call(
+        POC_ROOM_ERROR_DESCRIPTORS,
+        normalizedCode,
+      )
+    ) {
+      return POC_ROOM_ERROR_DESCRIPTORS[normalizedCode];
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(
+        CLIENT_DIAGNOSTIC_ERROR_DESCRIPTORS,
+        normalizedCode,
+      )
+    ) {
+      return CLIENT_DIAGNOSTIC_ERROR_DESCRIPTORS[normalizedCode];
+    }
   }
 
   return UNKNOWN_ROOM_ERROR_DESCRIPTOR;

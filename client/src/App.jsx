@@ -8,6 +8,7 @@ import {
   recoverErrorState,
   shouldClearDraftRoomInput,
 } from './prototype/diagnostic-state.js';
+import { createInitialIceDiagnosticsState } from './prototype/ice-diagnostics.js';
 import {
   MALFORMED_TEST_SCENARIOS,
   resolveRoomErrorDescriptor,
@@ -132,8 +133,11 @@ function App({ signalingClient, initialState } = {}) {
     selfPeerId = null,
     remotePeerId = null,
     lastError,
+    iceDiagnostics: rawIceDiagnostics = null,
     eventLog,
   } = prototypeState;
+  const iceDiagnostics =
+    rawIceDiagnostics ?? createInitialIceDiagnosticsState();
 
   useEffect(() => {
     if (roomId) {
@@ -186,6 +190,14 @@ function App({ signalingClient, initialState } = {}) {
       return;
     }
     actions.leaveRoom(roomId);
+  };
+
+  const handleRequestIce = () => {
+    const actions = getLifecycleActions();
+    if (!actions || !socketConnected || !roomId) {
+      return;
+    }
+    actions.requestIce(roomId);
   };
 
   const handleClearError = () => {
@@ -393,6 +405,109 @@ function App({ signalingClient, initialState } = {}) {
             </span>
           )}
         </div>
+      </section>
+
+      <section
+        className="ice-diagnostics"
+        aria-label="ICE configuration diagnostics"
+      >
+        <div className="ice-diagnostics-header">
+          <div className="ice-diagnostics-title-group">
+            <h2 className="ice-diagnostics-title">
+              ICE Configuration Diagnostics
+            </h2>
+            <p className="ice-diagnostics-note">
+              Request and validate development STUN-only ICE server
+              configuration for the active room without exposing server
+              endpoints or secrets.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleRequestIce}
+            disabled={
+              !socketConnected ||
+              !roomId ||
+              iceDiagnostics.status === 'loading'
+            }
+          >
+            Request ICE Config
+          </button>
+        </div>
+
+        <div className="ice-summary-grid">
+          <div className="status-card">
+            <span className="status-label">ICE Status</span>
+            <span
+              className={`status-value${
+                iceDiagnostics.status === 'invalid' ||
+                iceDiagnostics.status === 'error'
+                  ? ' status-value--error'
+                  : iceDiagnostics.status === 'idle'
+                    ? ' status-value--muted'
+                    : ''
+              }`}
+            >
+              {iceDiagnostics.status}
+            </span>
+            <span className="status-hint">
+              {iceDiagnostics.isStunOnly
+                ? 'Development STUN-only'
+                : 'Endpoints redacted'}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Server Entries</span>
+            <span className="status-value">
+              {iceDiagnostics.serverEntryCount}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Endpoint URLs</span>
+            <span className="status-value">{iceDiagnostics.endpointCount}</span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Schemes</span>
+            <span
+              className={`status-value${
+                iceDiagnostics.schemes.length === 0
+                  ? ' status-value--muted'
+                  : ''
+              }`}
+            >
+              {iceDiagnostics.schemes.length > 0
+                ? iceDiagnostics.schemes.join(', ')
+                : 'None'}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">STUN / TURN Counts</span>
+            <span className="status-value">
+              {`STUN: ${iceDiagnostics.stunCount} / TURN: ${iceDiagnostics.turnCount}`}
+            </span>
+          </div>
+        </div>
+
+        {iceDiagnostics.lastError ? (
+          <div
+            className="ice-diagnostics-error"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="event-log-badge event-log-badge--error">
+              {iceDiagnostics.lastError.code}
+            </span>
+            <span className="ice-diagnostics-error-text">
+              {iceDiagnostics.lastError.message}
+            </span>
+          </div>
+        ) : null}
       </section>
 
       <section
