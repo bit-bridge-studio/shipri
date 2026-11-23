@@ -70,17 +70,20 @@ Before deploying the Backend POC to staging:
 
 Both supported reverse-proxy topologies share the same secret-free signaling server runtime defaults and container health/WebSocket routing:
 
-* **Topology A (`docker-compose.prod.yml` + `client/nginx.conf`)**: builds `shipri-server` (`expose: 5001`) and `shipri-client` (`expose: 80`), attaches both to `shipri-network` and external `nginx-proxy` with zero host `ports:` bindings, and leaves `TURN_SHARED_SECRET` and `coturn` omitted. On the external host `nginx-proxy` (or Nginx Proxy Manager), terminate TLS for `poc.shipri.app` with WebSockets enabled and either proxy `/health` and `/socket.io/*` to `shipri-server:5001` and `/` to `shipri-client:80`, or proxy all paths for `poc.shipri.app` to `shipri-client:80` (where `client/nginx.conf` proxies `/health` and `/socket.io/` to `http://server:5001` over `shipri-network` and sets `X-Shipri-Environment: poc-staging` and `X-Robots-Tag: noindex, nofollow`).
-* **Topology B (`docker-compose.yml` + `Caddyfile`)**: runs bundled `shipri-proxy` (`CADDY_SITE_ADDRESS=${CADDY_SITE_ADDRESS:-poc.shipri.app}`), `shipri-client`, and `shipri-server` without any TURN secrets, and isolates `coturn` behind Docker Compose profile `turn` (`profiles: ["turn"]`) so default staging runs omit TURN.
+* **Topology A (`docker-compose.prod.yml` + `client/nginx.conf`)**: builds `shipri-server` (`expose: 5001`) and `shipri-client` (`expose: 80`, passing `VITE_SIGNALING_URL=${VITE_SIGNALING_URL:-https://poc.shipri.app}` as a Docker build arg), attaches both to `shipri-network` and external `nginx-proxy` with zero host `ports:` bindings, and leaves `TURN_SHARED_SECRET` and `coturn` omitted. On the external host `nginx-proxy` (or Nginx Proxy Manager), terminate TLS for `poc.shipri.app` with WebSockets enabled and either proxy `/health` and `/socket.io/*` to `shipri-server:5001` and `/` to `shipri-client:80`, or proxy all paths for `poc.shipri.app` to `shipri-client:80` (where `client/nginx.conf` proxies `/health` and `/socket.io/` to `http://server:5001` over `shipri-network` and sets `X-Shipri-Environment: poc-staging` and `X-Robots-Tag: noindex, nofollow`).
+* **Topology B (`docker-compose.yml` + `Caddyfile`)**: runs bundled `shipri-proxy` (`CADDY_SITE_ADDRESS=${CADDY_SITE_ADDRESS:-poc.shipri.app}`), `shipri-client` (passing `VITE_SIGNALING_URL=${VITE_SIGNALING_URL:-https://poc.shipri.app}` as a Docker build arg), and `shipri-server` without any TURN secrets, and isolates `coturn` behind Docker Compose profile `turn` (`profiles: ["turn"]`) so default staging runs omit TURN.
 
-Validate rendered configurations locally or on the staging host before starting containers:
+`client/Dockerfile` defaults `ARG VITE_SIGNALING_URL=https://poc.shipri.app` and exports `ENV VITE_SIGNALING_URL=$VITE_SIGNALING_URL` before `RUN npm run build`, so containerized builds target `https://poc.shipri.app` by default without baking in secrets. In addition, `client/src/signaling/socket-client.js` includes a safe non-localhost `https:` same-origin fallback (`window.location.origin`) when `VITE_SIGNALING_URL` is omitted at build time.
+
+Validate the standalone frontend prototype clean install and staging bundle build, plus the rendered Compose configurations, before starting containers:
 
 ```bash
+npm --prefix client ci && VITE_SIGNALING_URL=https://poc.shipri.app npm --prefix client run build
 docker compose -f docker-compose.prod.yml config
 docker compose -f docker-compose.yml config
 ```
 
-Confirm neither output includes `TURN_SHARED_SECRET` or the `coturn` service.
+Confirm both Compose outputs include `VITE_SIGNALING_URL: https://poc.shipri.app` under `client.build.args` and neither output includes `TURN_SHARED_SECRET`, host port `5001` bindings, or the default `coturn` service.
 
 Build and start the Backend POC staging stack for the active host topology:
 
@@ -102,21 +105,31 @@ npm --prefix server run smoke:staging
 # Optional overrides (for example another staging hostname or longer timeout):
 SMOKE_BASE_URL=https://poc.shipri.app SMOKE_ORIGIN=https://poc.shipri.app SMOKE_TIMEOUT_MS=5000 npm --prefix server run smoke:staging
 
-# 2. Manual curl checks for HTTPS health payload, headers, and CORS enforcement
+# 2. Manual curl checks for prototype UI route, HTTPS health payload, headers, and CORS enforcement
+curl -fsSI https://poc.shipri.app/
 curl -fsSI https://poc.shipri.app/health
 curl -fsS https://poc.shipri.app/health
 curl -fsSI -H "Origin: https://poc.shipri.app" https://poc.shipri.app/health
 curl -fsSI -H "Origin: https://shipri.app" https://poc.shipri.app/health
 ```
 
-Expected results: `npm --prefix server run smoke:staging` prints `[PASS]` with exit code `0` after confirming HTTPS `200 OK`, `Cache-Control: no-store`, JSON `{"status":"ok","roomsCount":...}`, matching `access-control-allow-origin: https://poc.shipri.app`, and a WSS WebSocket `room:create` -> `room:created` -> `room:leave` probe; `/health` omits `access-control-allow-origin` when requested from `https://shipri.app`; failed HTTP, CORS, schema, TLS, or WSS checks exit non-zero (`1`).
+Expected results: `npm --prefix server run smoke:staging` prints `[PASS]` with exit code `0` after confirming HTTPS `200 OK`, `Cache-Control: no-store`, JSON `{"status":"ok","roomsCount":...}`, matching `access-control-allow-origin: https://poc.shipri.app`, and a WSS WebSocket `room:create` -> `room:created` -> `room:leave` probe; `curl -fsSI https://poc.shipri.app/` returns `200 OK` with `X-Shipri-Environment: poc-staging` and `X-Robots-Tag: noindex, nofollow`; `/health` omits `access-control-allow-origin` when requested from `https://shipri.app`; failed HTTP, CORS, schema, TLS, or WSS checks exit non-zero (`1`).
+
+After DNS and TLS are active on `poc.shipri.app`, verify end-to-end frontend prototype WebRTC and diagnostic messaging between two remote peers:
+
+1. Open `https://poc.shipri.app` in two browsers on separate networks (for example desktop broadband and mobile cellular) and confirm both show `Signaling server connected` over WSS without CORS or mixed-content errors.
+2. Click **Create Room** on Peer A and verify `waiting_for_peer`, `entryRole: creator`, `negotiationDuty: offerer`, and a canonical `ship-xxxx` room ID.
+3. Enter that `ship-xxxx` room ID on Peer B and click **Join Room**, verifying `connected`, `entryRole: joiner`, and `negotiationDuty: answerer`.
+4. Confirm both peers validate STUN-only `ice:credentials` (`ICE Status: ready`, `Development STUN-only`), complete SDP offer/answer and trickle ICE negotiation (`Connection State: connected`), and open `"shipri-diagnostic"` (`Channel State: open`).
+5. Click **Send Ping** and submit short **Text** messages from both Peer A and Peer B, confirming RTT measurement, message receipt in both directions, and sanitized Event Log entries with zero raw SDP strings, ICE candidate details, or secrets.
+6. Click **Leave Room** on Peer B (confirming Peer A remains in `waiting_for_peer` as `offerer` with closed `RTCPeerConnection` and `RTCDataChannel`), then click **Leave Room** on Peer A to return cleanly to `unaffiliated`.
 
 When to run staging smoke checks:
 
-1. Immediately after the initial Backend POC staging deployment.
-2. After every staging container image rebuild, backend code update, or `.env` configuration change.
+1. Immediately after the initial Backend POC or frontend prototype staging deployment.
+2. After every staging container image rebuild, frontend/backend code update, or `.env` configuration change.
 3. After any reverse-proxy (`nginx-proxy`, `Caddyfile`, `client/nginx.conf`), TLS certificate, DNS, or firewall rule change.
-4. After executing any rollback procedure and before closing the Backend POC Acceptance Gate (`BP-6`).
+4. After executing any rollback procedure and before closing the Backend POC (`BP-6`) or Frontend Prototype (`FP-4`, `FP-G1`) acceptance checks.
 
 ### 1.7. POC Staging Operations: Deploy, Update, Rollback, and Log Inspection
 
@@ -143,7 +156,7 @@ Choose `<compose-file>` according to the host reverse-proxy topology from Subsec
    git rev-parse --short HEAD
    ```
 3. Create an uncommitted host `.env` containing only non-secret POC staging settings (`PORT=5001`, approved `ALLOWED_ORIGINS`, and `STUN_URLS` as documented in `server/.env.example`). Do not set `TURN_SHARED_SECRET` or any production credentials.
-4. Render and inspect the Compose configuration before starting containers, confirming neither `TURN_SHARED_SECRET` nor `coturn` is present:
+4. Render and inspect the Compose configuration before starting containers, confirming `VITE_SIGNALING_URL: https://poc.shipri.app` is set on `client` and neither `TURN_SHARED_SECRET` nor `coturn` is present:
    ```bash
    # Topology A:
    docker compose -f docker-compose.prod.yml config
@@ -161,7 +174,7 @@ Choose `<compose-file>` according to the host reverse-proxy topology from Subsec
    docker compose -f docker-compose.yml up -d --build
    docker compose -f docker-compose.yml ps
    ```
-6. Run the staging smoke checks from Subsection `1.6` (`npm --prefix server run smoke:staging` plus the manual `curl` HTTPS `/health` and CORS checks) and require exit code `0`.
+6. Run the staging smoke checks from Subsection `1.6` (`npm --prefix server run smoke:staging`, `curl -fsSI https://poc.shipri.app/`, plus the manual `curl` HTTPS `/health` and CORS checks) and require exit code `0`, then complete the manual two-peer remote WebRTC/diagnostic check from Subsection `1.6`.
 
 #### 1.7.2. Routine Updates
 
@@ -190,6 +203,7 @@ Choose `<compose-file>` according to the host reverse-proxy topology from Subsec
 4. Check container state (`docker compose -f <compose-file> ps`) and run the staging smoke checks from Subsection `1.6`:
    ```bash
    npm --prefix server run smoke:staging
+   curl -fsSI https://poc.shipri.app/
    curl -fsSI -H "Origin: https://poc.shipri.app" https://poc.shipri.app/health
    curl -fsSI -H "Origin: https://shipri.app" https://poc.shipri.app/health
    ```
@@ -215,10 +229,11 @@ Choose `<compose-file>` according to the host reverse-proxy topology from Subsec
    # Topology B:
    docker compose -f docker-compose.yml up -d --build --remove-orphans
    ```
-4. Verify container health and re-run the staging smoke checks from Subsection `1.6` to confirm HTTPS `/health`, CORS, and WSS Socket.IO connectivity are restored (exit code `0`):
+4. Verify container health and re-run the staging smoke checks from Subsection `1.6` to confirm prototype UI serving, HTTPS `/health`, CORS, and WSS Socket.IO connectivity are restored (exit code `0`):
    ```bash
    docker compose -f <compose-file> ps
    npm --prefix server run smoke:staging
+   curl -fsSI https://poc.shipri.app/
    curl -fsS https://poc.shipri.app/health
    ```
 
@@ -289,6 +304,8 @@ services:
     build:
       context: ./client
       dockerfile: Dockerfile
+      args:
+        - VITE_SIGNALING_URL=${VITE_SIGNALING_URL:-https://poc.shipri.app}
     container_name: shipri-client
     restart: unless-stopped
     expose:
@@ -341,6 +358,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+ARG VITE_SIGNALING_URL=https://poc.shipri.app
+ENV VITE_SIGNALING_URL=$VITE_SIGNALING_URL
 RUN npm run build
 
 # Stage 2: Serve
