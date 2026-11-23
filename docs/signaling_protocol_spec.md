@@ -311,7 +311,32 @@ interface SignalReceivePayload {
   // Exact signaling data from the sender, uninspected and unmodified.
   signalData: SignalData;
 }
+
+// Client-side trickle ICE and generation-scoped signaling data shapes.
+// The signaling server relays signalData opaquely without inspecting or mutating these fields.
+type ClientSignalData =
+  | {
+      type: 'offer' | 'answer';
+      sdp: string;
+      generation: number;
+    }
+  | {
+      candidate: {
+        candidate?: string;
+        sdpMid?: string | null;
+        sdpMLineIndex?: number | null;
+        usernameFragment?: string | null;
+      } | null;
+      generation: number;
+    };
 ```
+
+Client trickle ICE and generation rules for `signal:forward` and `signal:receive`:
+
+* **Immediate SDP Forwarding**: Both `offerer` and `answerer` emit SDP `offer` and `answer` descriptions immediately after `setLocalDescription()` succeeds without waiting for `iceGatheringState === "complete"`.
+* **Bidirectional Trickle ICE & Early Queuing**: Both peers emit ICE candidates as `icecandidate` events fire and queue inbound candidates received before the matching `setRemoteDescription()` resolves, flushing queued candidates in arrival order after `setRemoteDescription()` succeeds.
+* **Non-Blocking Five-Second Bound**: Exceeding 5 seconds (`5000ms`) during ICE candidate gathering surfaces stalled-gathering diagnostics only and never delays an otherwise valid initial SDP offer or answer; late candidates continue trickling while the session remains active.
+* **Peer ID & Generation Filtering**: Clients accept inbound SDP and ICE candidates only when `roomId` matches the active room, the peer state is `Connected`, `peerId` matches the active (non-retired) remote peer, and `signalData.generation` matches the active negotiation generation. Late events from departed peers or replaced generations are ignored.
 
 ### 3.5. ICE Credentials
 
@@ -449,8 +474,9 @@ An error does not mutate room or socket membership. The server emits `room:error
 
 The Part 2 Frontend Prototype (`frontend_prototype_plan.md` Section `4`) consumes Sections `2.1` and `3.1` through `3.6` of this specification directly against the Backend POC without mock signaling assumptions:
 
-* **Equal-Peer Negotiation Boundary**: `room:create` (`negotiationDuty: "offerer"`) and `room:join` (`negotiationDuty: "answerer"`) establish initial WebRTC SDP and single-channel (`"shipri-diagnostic"`) negotiation duties only between two equal peers. Negotiation duty never restricts which peer may send application messages in the prototype or publish/download files in the final product.
-* **Replacement-Peer Re-Offerer Promotion**: When a connected peer receives `peer:left` (`reason: "leave" | "disconnect"`), the remaining peer closes its stale `RTCPeerConnection` and `RTCDataChannel`, remains in `WaitingForPeer`, and assumes `"offerer"` duty when the next replacement peer triggers `peer:joined`.
+* **Equal-Peer Negotiation Boundary**: `room:create` (`negotiationDuty: "offerer"`) and `room:join` (`negotiationDuty: "answerer"`) establish initial WebRTC SDP and single-channel (`"shipri-diagnostic"`) negotiation duties only between two equal peers. Negotiation duty never restricts application messages in the prototype or determines which peer may publish or download files in the final product.
+* **Trickle ICE & Immediate Signaling Flow**: The `offerer` creates the initial `RTCPeerConnection` and `"shipri-diagnostic"` channel, calls `setLocalDescription()`, and forwards the SDP offer immediately without waiting for ICE gathering to finish; the `answerer` replies immediately after `setLocalDescription()` as well. Both peers trickle ICE candidates as produced, queue early remote candidates until `setRemoteDescription()` completes, and use the 5-second (`5000ms`) ICE gathering bound solely to surface stalled-gathering diagnostics without blocking valid SDP exchange.
+* **Replacement-Peer Re-Offerer Promotion & Generation Isolation**: When a connected peer receives `peer:left` (`reason: "leave" | "disconnect"`), the remaining peer immediately closes its `RTCPeerConnection` and `RTCDataChannel`, cancels gathering timers, invalidates the negotiation generation, retires the departed `peerId`, remains in `WaitingForPeer`, and starts a fresh negotiation generation as `"offerer"` when a replacement peer triggers `peer:joined`. Inbound SDP and ICE candidates are accepted only for the active room, current remote `peerId`, and matching generation; late events from replaced negotiations are ignored.
 * **Client-Side State & Sanitized Logging**: The prototype branches on `room:error` `code` values rather than `message`, preserves active room state when an error is returned, and redacts raw SDP payloads, ICE credentials, secrets, and diagnostic message bodies from logs.
 * **Out-of-Band WebRTC vs. Deferred Production Scope**: Prototype `ping`, `pong`, and short diagnostic `text` payloads travel solely over the direct WebRTC `RTCDataChannel` and never cross the signaling server. Production room authorization and dynamic TURN credentials are added in Part 3 (`backend_development_plan.md`), while E2EE, the encrypted shared file board, and file transfers remain deferred to Part 4 (`frontend_development_plan.md`).
 

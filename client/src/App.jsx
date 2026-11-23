@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   applyConnectionStatus,
+  applyWebRtcState,
   bindSignalingClient,
   clearEventLog,
   createInitialPrototypeState,
@@ -14,6 +15,10 @@ import {
   resolveRoomErrorDescriptor,
   runValidationScenario,
 } from './prototype/room-errors.js';
+import {
+  createInitialWebRtcState,
+  createWebRtcHarness,
+} from './prototype/webrtc-harness.js';
 import {
   createSignalingClient,
   sanitizeTextValue,
@@ -97,6 +102,7 @@ function resolveDisconnectNotice({
 
 function App({ signalingClient, initialState } = {}) {
   const clientRef = useRef(signalingClient ?? null);
+  const webrtcHarnessRef = useRef(null);
   const [joinRoomId, setJoinRoomId] = useState('');
   const [prototypeState, setPrototypeState] = useState(() => {
     const baseState = createInitialPrototypeState(initialState);
@@ -110,12 +116,21 @@ function App({ signalingClient, initialState } = {}) {
     const ownsClient = !signalingClient;
     clientRef.current = client;
     const unbind = bindSignalingClient(client, setPrototypeState);
+    const harness = createWebRtcHarness({
+      signalingClient: client,
+      onStateChange: (nextWebRtcState) => {
+        setPrototypeState((prev) => applyWebRtcState(prev, nextWebRtcState));
+      },
+    });
+    webrtcHarnessRef.current = harness;
 
     if (ownsClient) {
       client.connect();
     }
 
     return () => {
+      harness.dispose();
+      webrtcHarnessRef.current = null;
       unbind();
       if (ownsClient) {
         client.dispose();
@@ -134,10 +149,12 @@ function App({ signalingClient, initialState } = {}) {
     remotePeerId = null,
     lastError,
     iceDiagnostics: rawIceDiagnostics = null,
+    webrtc: rawWebRtc = null,
     eventLog,
   } = prototypeState;
   const iceDiagnostics =
     rawIceDiagnostics ?? createInitialIceDiagnosticsState();
+  const webrtc = rawWebRtc ?? createInitialWebRtcState();
 
   useEffect(() => {
     if (roomId) {
@@ -198,6 +215,21 @@ function App({ signalingClient, initialState } = {}) {
       return;
     }
     actions.requestIce(roomId);
+  };
+
+  const handleStartWebRtcNegotiation = () => {
+    const harness = webrtcHarnessRef.current;
+    if (
+      !harness ||
+      !socketConnected ||
+      !roomId ||
+      peerState !== 'connected' ||
+      negotiationDuty !== 'offerer' ||
+      webrtc.status === 'negotiating'
+    ) {
+      return;
+    }
+    void harness.startNegotiation();
   };
 
   const handleClearError = () => {
@@ -505,6 +537,170 @@ function App({ signalingClient, initialState } = {}) {
             </span>
             <span className="ice-diagnostics-error-text">
               {iceDiagnostics.lastError.message}
+            </span>
+          </div>
+        ) : null}
+      </section>
+
+      <section
+        className="webrtc-harness"
+        aria-label="WebRTC signaling harness"
+      >
+        <div className="webrtc-harness-header">
+          <div className="webrtc-harness-title-group">
+            <h2 className="webrtc-harness-title">WebRTC Signaling Harness</h2>
+            <p className="webrtc-harness-note">
+              Trickle ICE and SDP offer/answer negotiation run on the active
+              room peer connection. Negotiation duty controls initial signaling
+              setup only and never restricts application messages.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={handleStartWebRtcNegotiation}
+            disabled={
+              !socketConnected ||
+              !roomId ||
+              peerState !== 'connected' ||
+              negotiationDuty !== 'offerer' ||
+              webrtc.status === 'negotiating'
+            }
+          >
+            Start WebRTC Negotiation
+          </button>
+        </div>
+
+        <div className="webrtc-summary-grid">
+          <div className="status-card">
+            <span className="status-label">Harness Status</span>
+            <span
+              className={`status-value${
+                webrtc.status === 'failed'
+                  ? ' status-value--error'
+                  : webrtc.status === 'idle'
+                    ? ' status-value--muted'
+                    : ''
+              }`}
+            >
+              {webrtc.status}
+            </span>
+            <span className="status-hint">
+              {webrtc.localDescriptionForwarded
+                ? 'SDP forwarded immediately'
+                : 'Awaiting local SDP'}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Signaling State</span>
+            <span
+              className={`status-value${
+                webrtc.signalingState === 'idle' ? ' status-value--muted' : ''
+              }`}
+            >
+              {webrtc.signalingState}
+            </span>
+            <span className="status-hint">
+              {webrtc.activePeerId
+                ? `Active peer: ${webrtc.activePeerId}`
+                : 'No active peer session'}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">ICE Gathering State</span>
+            <span className="status-value">{webrtc.iceGatheringState}</span>
+            <span className="status-hint">
+              {webrtc.stalledGathering
+                ? '5000ms bound exceeded'
+                : 'Trickle ICE active'}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">ICE Connection State</span>
+            <span
+              className={`status-value${
+                webrtc.iceConnectionState === 'failed'
+                  ? ' status-value--error'
+                  : ''
+              }`}
+            >
+              {webrtc.iceConnectionState}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Peer Connection State</span>
+            <span
+              className={`status-value${
+                webrtc.connectionState === 'failed'
+                  ? ' status-value--error'
+                  : ''
+              }`}
+            >
+              {webrtc.connectionState}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Negotiation Generation</span>
+            <span className="status-value">{webrtc.generation}</span>
+            <span className="status-hint">
+              {webrtc.remoteGeneration !== null
+                ? `Session gen: ${webrtc.remoteGeneration}`
+                : 'No active generation'}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Trickle ICE Counters</span>
+            <span className="status-value">
+              {`Out: ${webrtc.localCandidatesSent} / In: ${webrtc.remoteCandidatesReceived} / Applied: ${webrtc.remoteCandidatesApplied}`}
+            </span>
+            <span className="status-hint">
+              {`Queued: ${webrtc.queuedCandidateCount} (Total queued: ${webrtc.remoteCandidatesQueued}) | Stale ignored: ${webrtc.staleEventsIgnored}`}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Data Channel</span>
+            <span
+              className={`status-value${
+                webrtc.dataChannelState === 'none' ? ' status-value--muted' : ''
+              }`}
+            >
+              {webrtc.dataChannelState}
+            </span>
+            <span className="status-hint">shipri-diagnostic</span>
+          </div>
+        </div>
+
+        {webrtc.stalledGathering ? (
+          <div className="webrtc-stall-notice" role="status" aria-live="polite">
+            <span className="event-log-badge event-log-badge--warning">
+              ICE Gathering Stalled (&gt;5000ms)
+            </span>
+            <span className="webrtc-stall-text">
+              {webrtc.stalledDiagnostic ??
+                'ICE candidate gathering exceeded 5000ms; initial SDP was not delayed and late candidates continue trickling.'}
+            </span>
+          </div>
+        ) : null}
+
+        {webrtc.lastError ? (
+          <div
+            className="ice-diagnostics-error"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="event-log-badge event-log-badge--error">
+              {webrtc.lastError.code}
+            </span>
+            <span className="ice-diagnostics-error-text">
+              {webrtc.lastError.message}
             </span>
           </div>
         ) : null}
