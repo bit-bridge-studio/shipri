@@ -75,7 +75,7 @@ The prototype first implements room creation/joining, Socket.IO event inspection
 
 **Entry gate:** Part 1 Backend POC Acceptance Gate has passed, POC tests and staging checks are green, and the minimum event contract is frozen.
 
-**Gate:** the prototype validates the POC contract, establishes a direct WebRTC data channel, and is ready to expand alongside full backend development.
+**Gate:** the prototype validates the POC contract, establishes a direct WebRTC data channel, and is ready to expand alongside full backend development. (`FP-G1` unit/gate tests, Vite/Compose staging builds, local live Backend POC Socket.IO verification, and prototype limitations are recorded in `frontend_prototype_plan.md` Section `8`; external `https://poc.shipri.app` smoke and two-network browser checks complete remote validation once public DNS `A`-record routing is assigned.)
 
 ### Part 3: Full Backend Development
 
@@ -120,4 +120,4 @@ Each implementation stage follows TDD:
 4. Run stage-specific checks.
 5. Update documentation when behavior or limitations change.
 
-The immediate next step is to resolve the backend POC contract, then begin Part 1.
+Part 2 frontend prototype foundation (`FP-0` through `FP-G1`) test, build, local live-server verification, and prototype limitations are recorded in `frontend_prototype_plan.md` Section `8`. Once external DNS `A`-record assignment for `poc.shipri.app` allows `npm --prefix server run smoke:staging` and two-network browser checks to close the live staging gate, Part 3 (`backend_development_plan.md` stage `BE-0`) is the next stage.
