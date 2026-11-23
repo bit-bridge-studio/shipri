@@ -314,6 +314,8 @@ Prototype error-handling rules:
 * The frontend prototype foundation validates the Backend POC without mocks.
 * Full backend development may begin.
 
+**Status:** Foundation test suite, Vite/Compose staging build checks, local live Backend POC Socket.IO integration, and prototype limitations are verified and recorded in Section `8` below (`2026-11-23`); external `https://poc.shipri.app` smoke and two-network browser checks remain gated on public DNS `A`-record assignment for `poc.shipri.app`.
+
 ---
 
 ## 6. Prototype Expansion During Full Backend Development
@@ -359,3 +361,47 @@ At the end of each stage, run:
 * `npm run build`.
 * Manual two-tab room and WebRTC scenarios.
 * Direct and forced-TURN checks when ICE behavior changes.
+
+---
+
+## 8. Prototype Foundation Acceptance Evidence & Limitations (FP-G1)
+
+Recorded on `2026-11-23` after completing prototype foundation implementation (`FP-0` through `FP-4`) and integrated `FP-G1` acceptance verification:
+
+### 8.1. Automated Frontend and Backend Test & Build Evidence
+
+* **Frontend unit and gate suite (`npm --prefix client test`)**: `10` test files passed, `75` tests passed (`0` failed, `0` skipped), runnable standalone via `cd client && npm ci && npm test` without importing `server/` modules.
+  * `client/test/prototype-foundation-gate.test.js` (`4` integrated `FP-G1` gate tests): validates canonical `ship-[a-f0-9]{4}` room creation, second-peer join, third-peer rejection (`ROOM_FULL`), creator and joiner explicit `room:leave` plus unexpected `disconnect` with remaining-peer `offerer` promotion, replacement-peer joins with incremented negotiation generations and stale `peerId`/generation filtering, all `7` stable `room:error` codes (`ROOM_NOT_FOUND`, `ROOM_FULL`, `INVALID_ROOM_ID`, `INVALID_PAYLOAD`, `UNAUTHORIZED`, `PEER_UNAVAILABLE`, `SERVER_BUSY`), `UNKNOWN_ERROR` fallback, `MALFORMED_TEST_SCENARIOS` presets, `INVALID_ICE_CREDENTIALS`, selective error recovery preserving active room state and sanitized logs, STUN-only `ice:credentials` validation, early trickle ICE queuing and ordered flush after `setRemoteDescription()`, `5000ms` non-blocking ICE gathering bound, bidirectional `"shipri-diagnostic"` `ping`/`pong` and short `text` exchange initiated by both `offerer` and `answerer`, and zero leaked SDP strings, ICE candidates, TURN secrets, `#key=` fragments, tokens, or file metadata across UI markup and sanitized logs.
+* **Backend POC suite (`npm --prefix server test`)**: `12` test files passed, `205` tests passed (`0` failed, `0` skipped).
+* **Frontend production builds**:
+  * `npm --prefix client run build`: passed (`66` modules transformed).
+  * `VITE_SIGNALING_URL=https://poc.shipri.app npm --prefix client run build`: passed (`66` modules transformed).
+
+### 8.2. Local Live Backend POC Integration Verification
+
+* Started the live Backend POC signaling server locally (`npm --prefix server start` on `http://127.0.0.1:5001`) and confirmed `GET /health` returned `200 OK` (`{"status":"ok","roomsCount":0}`).
+* Connected real `createSignalingClient` (`socket.io-client`) instances from `client/src/signaling/socket-client.js` paired with `bindSignalingClient`, `createRoomLifecycleActions`, `createWebRtcHarness`, and `createDiagnosticChannelController` over live localhost Socket.IO (`http://127.0.0.1:5001`, using `createMockPeerConnectionFactory` in headless Node.js for the `RTCPeerConnection` engine):
+  * Verified room creation (`roomId: "ship-7bfb"`), `GET /health` (`roomsCount: 1`), second-peer join, third-peer rejection (`ROOM_FULL`), STUN-only `ice:credentials` validation (`serverEntryCount: 1`, `endpointCount: 2`, `schemes: ["stun"]`, `isStunOnly: true`), live Socket.IO offer/answer and trickle ICE relay (`Gen 1`), bidirectional `"shipri-diagnostic"` `ping`/`pong` (`11 ms` / `15 ms`) and `text` exchange, explicit creator `room:leave` with joiner promotion to `offerer`, replacement-peer join with `Gen 3` re-negotiation and bidirectional `ping`/`pong`/`text` (`11 ms` / `15 ms`), unexpected disconnect (`peer:left` with `reason: "disconnect"`), final-peer leave, empty-room deletion (`GET /health` `roomsCount: 0`), and zero sensitive tokens across client `eventLog` and server stdout.
+
+### 8.3. Staging Bundle Configuration & Host DNS Status
+
+* **Docker & Compose Topology Validation**: `docker compose -f docker-compose.prod.yml config` and `docker compose -f docker-compose.yml config` exited `0`, confirming `VITE_SIGNALING_URL: https://poc.shipri.app` under `client.build.args` with zero `TURN_SHARED_SECRET`, zero host `5001` bindings, and no default `coturn` service.
+* **Staging VPS Container Build (`deploy.yml`)**: GitHub Actions `deploy.yml` run `44228702186` (`2026-11-18T03:12:00Z`, `conclusion: success`) pulled `main` and executed `docker compose -f docker-compose.prod.yml up -d --build` on the staging VPS, leaving `shipri-server` and `shipri-client` running.
+* **Public DNS & Live Staging Endpoint Status (`https://poc.shipri.app`)**: Running `dig +short A poc.shipri.app` currently returns empty output, and `npm --prefix server run smoke:staging` fails with exit `1` (`[FAIL] Backend POC staging smoke checks failed: fetch failed`). Remote HTTPS/WSS validation (`npm --prefix server run smoke:staging`, `curl -fsSI https://poc.shipri.app/`, `curl -fsS https://poc.shipri.app/health`, and two-network manual browser WebRTC + `"shipri-diagnostic"` ping/pong/text checks per `deployment_docker_spec.md` Subsections `1.6` and `1.7`) remains pending external DNS `A`-record and host proxy assignment for `poc.shipri.app`.
+
+### 8.4. Prototype Limitations
+
+* **Plaintext diagnostic channel only**: `"shipri-diagnostic"` exchanges unencrypted JSON `ping`, `pong`, and short `text` payloads (`MAX_DIAGNOSTIC_TEXT_LENGTH = 200`); URL `#key=` CSPRNG secrets, HKDF key derivation, and AES-GCM encryption belong to Part 4 (`frontend_development_plan.md`).
+* **No user files or persistence**: The prototype prohibits real user files, encrypted shared file boards, chunked backpressure transfers, and Chrome/Safari disk persistence; active rooms reside only in `shipri-server` memory and reset on server restart.
+* **Development STUN-only ICE without TURN**: `ice:get` returns configured public STUN URLs only; `coturn`, dynamic HMAC-SHA1 TURN credentials, selectable `iceTransportPolicy: "relay"`, and candidate-pair direct-versus-relay diagnostics are deferred to Part 3 (`BE-4` and `FP-5`).
+* **No production room authorization, TTL, or abuse controls**: Room membership relies solely on active Socket.IO connection state for canonical `ship-[a-f0-9]{4}` IDs, omitting production room authorization tokens, idle TTL/max lifetime, rate limiting, trusted-proxy limits, and room caps until Part 3 (`BE-2`, `BE-3`, and `FP-6`).
+* **Pre-DNS remote staging verification boundary**: While local live Backend POC integration, Vite staging builds, and Docker Compose configurations are verified, live public-network browser verification over `https://poc.shipri.app` awaits external DNS pointing `poc.shipri.app` to the staging VPS.
+
+### 8.5. Running Locally and Deploying to Staging
+
+1. **Local Development Run**:
+   * Terminal 1 (Backend POC): `cd server && npm ci && npm start` (listens on `http://127.0.0.1:5001`).
+   * Terminal 2 (Frontend Prototype): `cd client && npm ci && npm run dev` (serves on `http://localhost:5173`, connecting to `http://localhost:5001` via `resolveSignalingUrl`).
+   * Open two browser tabs at `http://localhost:5173` to exercise room creation, joining, third-tab `ROOM_FULL`, `Validation & Error Scenarios`, STUN-only `ice:get`, WebRTC negotiation, `"shipri-diagnostic"` bidirectional `ping`/`pong`/`text`, and leave/disconnect recovery.
+2. **Staging Deployment and Post-DNS Verification**:
+   * Follow `deployment_docker_spec.md` Subsections `1.6` and `1.7` on the staging host (`docker compose -f docker-compose.prod.yml up -d --build` for Topology A or `docker compose -f docker-compose.yml up -d --build` for Topology B), then run `npm --prefix server run smoke:staging` and the two-network browser verification checklist once `dig +short A poc.shipri.app` resolves to the staging VPS.
