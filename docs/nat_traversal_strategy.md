@@ -40,28 +40,71 @@ Many corporate and public Wi-Fi networks block UDP traffic entirely and restrict
 
 ---
 
-## 3. Dynamic Authentication (REST API Spec)
+## 3. Environment-Driven ICE & Dynamic TURN Authentication Contract
 
-Dynamic TURN authentication is a full-backend production extension, not a Backend POC requirement. The POC `ice:get` response is defined in `signaling_protocol_spec.md` and contains STUN-only `iceServers`.
+Dynamic TURN authentication is a full-backend production extension (`BE-4`), while the Backend POC (`REQUIRE_TURN=false` with unset `TURN_URLS`/`TURN_SHARED_SECRET`) returns STUN-only `iceServers` as defined in `signaling_protocol_spec.md` Section `3.5`.
 
-To prevent unauthorized parties from using our TURN server as a free proxy for generic traffic, we implement time-limited TURN REST API credentials compatible with Coturn `use-auth-secret`.
+To prevent unauthorized parties from using the Coturn instance as an open relay, production implements time-limited TURN REST credentials compatible with Coturn `use-auth-secret` and driven entirely by validated runtime environment variables.
 
-1. **Shared Secret**: The Signaling Server and the Coturn server share a static, long-term secret key (`TURN_SHARED_SECRET`).
-2. **On-Demand Credentials**: When a client creates or joins a room, the client queries the Signaling Server for ICE configuration.
-3. **Credential Calculation**: The signaling server generates ephemeral credentials valid for 2 hours:
-   * **Username**: `timestamp:username_identifier` (e.g., `1785239200:user123`)
-   * **Password**: `HMAC-SHA1(TURN_SHARED_SECRET, Username)`
+### 3.1. Environment Configuration Contract
 
-### Production API Payload Schema
+```typescript
+// Validated environment configuration consumed by the signaling ICE provider.
+interface IceRuntimeConfig {
+  // Required comma-separated STUN endpoints (e.g., "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302").
+  stunUrls: string[];
 
-In the full backend production flow, the client emits a request `ice:get` to the signaling server:
+  // Full-backend comma-separated TURN/TURNS endpoints (e.g., turn:turn.shipri.app:3478?transport=udp,...).
+  turnUrls: string[];
+
+  // Shared HMAC-SHA1 secret matching Coturn static-auth-secret. Never serialized to clients or logged.
+  turnSharedSecret?: string;
+
+  // Ephemeral credential validity window in seconds (default 7200 = 2 hours; bounded 60..86400).
+  turnCredentialTtlSeconds: number;
+
+  // False in POC STUN-only mode; true in full backend so missing/invalid TURN config fails closed.
+  requireTurn: boolean;
+}
+```
+
+### 3.2. On-Demand Credential Derivation and Failure Handling
+
+1. **Authorized Membership Required**: Only an active member of a non-expired room (`room:create` or `room:join` completed; `socketRooms` matches `roomId`) may invoke `ice:get`. Non-members receive `UNAUTHORIZED`; invalid room format receives `INVALID_ROOM_ID`; absent or expired rooms receive `ROOM_NOT_FOUND`.
+2. **Ephemeral Username and HMAC-SHA1 Credential**: When `turnUrls.length > 0` and `turnSharedSecret` is configured:
+   * `expiryEpoch = Math.floor(Date.now() / 1000) + turnCredentialTtlSeconds`
+   * `opaqueTag = crypto.randomBytes(8).toString('hex')` (avoids exposing raw internal `socketId` or IP)
+   * `username = "${expiryEpoch}:${opaqueTag}"`
+   * `credential = crypto.createHmac('sha1', turnSharedSecret).update(username).digest('base64')`
+3. **Fail-Closed Production Error Handling**: If `REQUIRE_TURN=true` and `TURN_URLS` is empty or `TURN_SHARED_SECRET` is missing/empty (or if no valid STUN/TURN entries exist in POC mode), the server emits `room:error` with `code: 'SERVER_BUSY'` and a generic message, without leaking environment values, secrets, or stack traces.
+
+### 3.3. Production `ice:get` / `ice:credentials` TypeScript & JSON Contract
+
+```typescript
+interface IceGetPayload {
+  roomId: RoomId;
+}
+
+interface IceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
+interface IceCredentialsPayload {
+  roomId: RoomId;
+  iceServers: IceServer[];
+}
+```
+
+Client request (`ice:get`):
 ```json
 {
   "roomId": "ship-83a1"
 }
 ```
 
-The production server responds with the `ice:credentials` payload including STUN and short-lived TURN entries:
+Full backend server response (`ice:credentials`):
 ```json
 {
   "roomId": "ship-83a1",
@@ -78,8 +121,8 @@ The production server responds with the `ice:credentials` payload including STUN
         "turn:turn.shipri.app:3478?transport=tcp",
         "turns:turn.shipri.app:443?transport=tcp"
       ],
-      "username": "1785239200:user123",
-      "credential": "computed_hmac_sha1_signature_string"
+      "username": "1785239200:9f4c12a8e31b70d4",
+      "credential": "computed_hmac_sha1_signature_base64"
     }
   ]
 }
@@ -141,3 +184,4 @@ syslog
    });
    ```
 6. **Bandwidth Warning**: If the selected ICE candidate is a `relay` candidate, notify the user in the UI: *"Direct P2P connection could not be established. Relaying via secure server (speed may be reduced)."*
+7. **Prototype Transport Policy and Candidate-Pair Diagnostics (`FP-5`)**: The Part 3 frontend prototype adds selectable `iceTransportPolicy` modes (`"all"` for direct-preferred and `"relay"` for forced-TURN verification), summarizes gathered candidate types (`host`, `srflx`, `relay`), inspects `RTCPeerConnection.getStats()` to report whether the selected active candidate pair is `direct` or `relay`, displays the bandwidth notice above when relayed, and surfaces `SERVER_BUSY` or ICE/TURN connectivity errors cleanly without ever logging `TURN_SHARED_SECRET`, raw TURN credentials, or raw candidate IP details.
