@@ -129,12 +129,15 @@ syslog
 
 ## 5. ICE Connection Optimization Rules for Clients
 
-1. **ICE Candidate Gathering Timeout**: Sometimes ICE gathering stalls looking for interfaces that are disconnected. We set a strict client-side timeout of **5 seconds** for candidate gathering before proceeding with the handshake.
-2. **WebRTC Peer Connection Options**:
+1. **Trickle ICE and Immediate SDP Forwarding**: Clients must forward SDP offers and answers via `signal:forward` immediately after `setLocalDescription()` succeeds without waiting for ICE candidate gathering (`iceGatheringState === "complete"`) to finish. Both peers trickle local candidates via `signal:forward` as `icecandidate` events produce them.
+2. **Early Remote Candidate Queuing**: Inbound ICE candidates that arrive before the matching `setRemoteDescription()` resolves must be queued in arrival order and applied via `addIceCandidate()` immediately after `setRemoteDescription()` succeeds.
+3. **Five-Second ICE Candidate Gathering Bound**: Sometimes ICE gathering stalls while probing disconnected or unresponsive network interfaces. Clients enforce a **5-second (`5000ms`)** diagnostic bound on ICE candidate gathering: exceeding 5 seconds surfaces a stalled-gathering diagnostic notice in the UI without delaying an otherwise valid initial SDP offer or answer, and late candidates produced afterward continue trickling while the active negotiation generation remains open.
+4. **Generation-Scoped ICE Session Cleanup**: Each negotiation session binds inbound and outbound ICE candidates to the active remote `peerId` and monotonic negotiation generation. On `peer:left`, `room:leave`, or socket `disconnect`, clients close the active `RTCPeerConnection` and `RTCDataChannel`, clear gathering timers, invalidate the previous generation, and ignore late candidates from replaced sessions.
+5. **WebRTC Peer Connection Options**:
    ```javascript
    const peerConnection = new RTCPeerConnection({
      iceServers: receivedIceServers,
      iceTransportPolicy: "all" // Allows fallback to TURN when relaying is needed
    });
    ```
-3. **Bandwidth Warning**: If the selected ICE candidate is a `relay` candidate, notify the user in the UI: *"Direct P2P connection could not be established. Relaying via secure server (speed may be reduced)."*
+6. **Bandwidth Warning**: If the selected ICE candidate is a `relay` candidate, notify the user in the UI: *"Direct P2P connection could not be established. Relaying via secure server (speed may be reduced)."*
