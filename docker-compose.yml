@@ -20,6 +20,8 @@ services:
     build:
       context: ./client
       dockerfile: Dockerfile
+      args:
+        - VITE_SIGNALING_URL=${VITE_SIGNALING_URL:-https://poc.shipri.app}
     container_name: shipri-client
     restart: unless-stopped
     expose:

@@ -4,6 +4,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+ARG VITE_SIGNALING_URL=https://poc.shipri.app
+ENV VITE_SIGNALING_URL=$VITE_SIGNALING_URL
 RUN npm run build
 
 # Stage 2: Serve

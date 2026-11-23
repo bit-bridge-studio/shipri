@@ -479,35 +479,24 @@ function buildNormalizedPayloadDetails(safeEvent, payload) {
   }
 }
 
-/**
- * Resolves and validates the signaling server origin from environment variables.
- * Defaults to http://localhost:5001 when VITE_SIGNALING_URL is missing or blank.
- * @param {Record<string, unknown>} [env]
- * @returns {string} Canonical HTTP(S) origin without a trailing slash.
- */
-export function resolveSignalingUrl(env = import.meta?.env ?? {}) {
-  if (env === null || typeof env !== 'object' || Array.isArray(env)) {
-    throw new Error(
-      'Invalid signaling environment configuration: env must be an object.',
-    );
-  }
+const LOCALHOST_HOSTNAMES = new Set([
+  'localhost',
+  '::1',
+  '[::1]',
+  '0.0.0.0',
+]);
 
-  const rawUrl = env.VITE_SIGNALING_URL;
-  if (rawUrl === undefined || rawUrl === null) {
-    return DEFAULT_SIGNALING_URL;
-  }
+function isLocalHostname(hostname) {
+  const normalized = hostname.toLowerCase();
+  return (
+    LOCALHOST_HOSTNAMES.has(normalized) ||
+    normalized.endsWith('.localhost') ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalized)
+  );
+}
 
-  if (typeof rawUrl !== 'string') {
-    throw new Error(
-      'Invalid VITE_SIGNALING_URL configuration: URL must be a string.',
-    );
-  }
-
+function parseValidatedHttpOrigin(rawUrl, options = {}) {
   const trimmed = rawUrl.trim();
-  if (trimmed === '') {
-    return DEFAULT_SIGNALING_URL;
-  }
-
   let parsedUrl;
   try {
     parsedUrl = new URL(trimmed);
@@ -517,7 +506,13 @@ export function resolveSignalingUrl(env = import.meta?.env ?? {}) {
     );
   }
 
-  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+  if (options.requireHttps === true) {
+    if (parsedUrl.protocol !== 'https:') {
+      throw new Error(
+        'Invalid VITE_SIGNALING_URL configuration: protocol must be https:.',
+      );
+    }
+  } else if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
     throw new Error(
       'Invalid VITE_SIGNALING_URL configuration: protocol must be http: or https:.',
     );
@@ -554,7 +549,76 @@ export function resolveSignalingUrl(env = import.meta?.env ?? {}) {
     );
   }
 
-  return parsedUrl.origin;
+  return parsedUrl;
+}
+
+function resolveDefaultSignalingUrl(options = {}) {
+  const safeOptions = isObjectRecord(options) ? options : {};
+  const candidate =
+    safeOptions.locationOrigin ??
+    safeOptions.fallbackOrigin ??
+    globalThis.window?.location?.origin;
+
+  if (typeof candidate !== 'string' || candidate.trim() === '') {
+    return DEFAULT_SIGNALING_URL;
+  }
+
+  try {
+    const parsedUrl = parseValidatedHttpOrigin(candidate, { requireHttps: true });
+    if (isLocalHostname(parsedUrl.hostname)) {
+      return DEFAULT_SIGNALING_URL;
+    }
+    return parsedUrl.origin;
+  } catch {
+    return DEFAULT_SIGNALING_URL;
+  }
+}
+
+function readDefaultViteEnv() {
+  // Access import.meta.env without optional chaining so Vite statically inlines VITE_* env vars.
+  if (typeof import.meta !== 'undefined' && import.meta.env) {
+    return {
+      ...import.meta.env,
+      ...(import.meta.env.VITE_SIGNALING_URL !== undefined
+        ? { VITE_SIGNALING_URL: import.meta.env.VITE_SIGNALING_URL }
+        : {}),
+    };
+  }
+  return {};
+}
+
+/**
+ * Resolves and validates the signaling server origin from environment variables.
+ * Falls back to a safe non-localhost HTTPS origin when provided or active in the browser,
+ * otherwise defaults to http://localhost:5001 when VITE_SIGNALING_URL is missing or blank.
+ * @param {Record<string, unknown>} [env]
+ * @param {{ locationOrigin?: string, fallbackOrigin?: string }} [options]
+ * @returns {string} Canonical HTTP(S) origin without a trailing slash.
+ */
+export function resolveSignalingUrl(env = readDefaultViteEnv(), options = {}) {
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) {
+    throw new Error(
+      'Invalid signaling environment configuration: env must be an object.',
+    );
+  }
+
+  const rawUrl = env.VITE_SIGNALING_URL;
+  if (rawUrl === undefined || rawUrl === null) {
+    return resolveDefaultSignalingUrl(options);
+  }
+
+  if (typeof rawUrl !== 'string') {
+    throw new Error(
+      'Invalid VITE_SIGNALING_URL configuration: URL must be a string.',
+    );
+  }
+
+  const trimmed = rawUrl.trim();
+  if (trimmed === '') {
+    return resolveDefaultSignalingUrl(options);
+  }
+
+  return parseValidatedHttpOrigin(trimmed).origin;
 }
 
 /**
@@ -702,6 +766,8 @@ export function normalizeSignalingEvent(input = {}) {
  * @param {{
  *   env?: Record<string, unknown>,
  *   url?: string,
+ *   locationOrigin?: string,
+ *   fallbackOrigin?: string,
  *   ioFactory?: Function,
  *   now?: () => string | number | Date,
  * }} [options]
@@ -722,7 +788,10 @@ export function createSignalingClient(options = {}) {
   const resolvedUrl =
     options.url !== undefined
       ? resolveSignalingUrl({ VITE_SIGNALING_URL: options.url })
-      : resolveSignalingUrl(options.env ?? import.meta?.env ?? {});
+      : resolveSignalingUrl(options.env ?? readDefaultViteEnv(), {
+          locationOrigin: options.locationOrigin,
+          fallbackOrigin: options.fallbackOrigin,
+        });
 
   const ioFactory = options.ioFactory ?? io;
   const now = options.now ?? (() => new Date().toISOString());

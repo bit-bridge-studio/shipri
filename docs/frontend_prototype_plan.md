@@ -282,17 +282,24 @@ Prototype error-handling rules:
 
 **Work:**
 
-* Build and deploy the diagnostic frontend to the approved staging origin.
-* Configure the frontend to connect to the staging backend through WSS.
+* Build and deploy the diagnostic frontend to the approved staging origin (`https://poc.shipri.app`).
+* Configure the frontend to connect to the staging backend through WSS (`VITE_SIGNALING_URL=https://poc.shipri.app` build arg default in `client/Dockerfile`, `docker-compose.prod.yml`, and `docker-compose.yml`, plus safe non-localhost `https:` `window.location.origin` fallback in `client/src/signaling/socket-client.js`).
 * Validate room creation, joining, signaling, and data-channel ping/pong from two devices.
 * Repeat the direct WebRTC check from two different networks.
-* Keep prototype diagnostics and staging access separate from the future production route.
+* Keep prototype diagnostics and staging access separate from the future production route (`X-Shipri-Environment: poc-staging`, `X-Robots-Tag: noindex, nofollow`, zero secrets, no `coturn`).
+
+**Staging Configuration and Verification Evidence:**
+
+* **Container & Compose Wiring**: `client/Dockerfile` defines `ARG VITE_SIGNALING_URL=https://poc.shipri.app` and `ENV VITE_SIGNALING_URL=$VITE_SIGNALING_URL` before `RUN npm run build`; both `docker-compose.prod.yml` and `docker-compose.yml` pass `VITE_SIGNALING_URL=${VITE_SIGNALING_URL:-https://poc.shipri.app}` under `client.build.args` without exposing host port `5001`, `TURN_SHARED_SECRET`, or default `coturn` containers.
+* **Build Verification**: `VITE_SIGNALING_URL=https://poc.shipri.app npm --prefix client run build` builds the Vite bundle cleanly, and `docker compose -f docker-compose.prod.yml config` / `docker compose -f docker-compose.yml config` validate the secret-free staging service topologies.
+* **Automated Staging Integration Verification**: `client/test/staging-prototype.test.js` verifies `resolveSignalingUrl` non-localhost `https:` fallback and explicit `VITE_SIGNALING_URL` precedence, Docker/Compose build-arg configuration, and a full two-remote-peer prototype integration run configured for `https://poc.shipri.app` (`room:create`, `room:join`, STUN-only `ice:credentials`, offer/answer + trickle ICE, `"shipri-diagnostic"` bidirectional `ping`/`pong` + short `text`, sanitized `eventLog` redaction, and `room:leave` teardown) using deterministic Socket.IO and `RTCPeerConnection` test harnesses.
+* **Post-DNS Host Verification (`https://poc.shipri.app`)**: Once `poc.shipri.app` DNS and VPS containers (`docker compose -f docker-compose.prod.yml up -d --build` or `docker compose -f docker-compose.yml up -d --build`) are running, follow `deployment_docker_spec.md` Subsections `1.6` and `1.7` on the host to run `npm --prefix server run smoke:staging`, `curl -fsSI https://poc.shipri.app/`, `curl -fsS https://poc.shipri.app/health`, and the manual two-device cross-network browser WebRTC and `"shipri-diagnostic"` ping/pong/text check.
 
 **Exit criteria:**
 
 * The deployed prototype connects to the deployed Backend POC through WSS.
 * Two remote devices establish a direct WebRTC data channel through staging signaling.
-* Deployment and rollback steps are documented.
+* Deployment and rollback steps are documented (`deployment_docker_spec.md` Subsections `1.6` and `1.7`).
 
 ### FP-G1: Prototype Foundation Gate
 
