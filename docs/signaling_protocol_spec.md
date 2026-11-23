@@ -52,7 +52,49 @@ After either peer leaves a connected room, the remaining peer becomes the offere
 
 Empty-room cleanup is shared by the Backend POC and production lifecycle: when the last active peer leaves or disconnects, the room is deleted immediately.
 
-The Backend POC does not expire a waiting or connected room by TTL and does not apply rate limits, maximum room counts, or production access tokens. Production may additionally expire waiting or connected rooms through idle TTL, maximum lifetime, and garbage collection rules defined by the backend development plan. Socket.IO automatically removes a disconnected socket from adapter rooms; the backend must still remove its application room membership and notify any remaining peer during disconnect cleanup.
+The Backend POC does not expire a waiting or connected room by TTL and does not apply rate limits, maximum room counts, or production access tokens. Production applies the full backend authorization, TTL, capacity, and rate-limit contract in Subsection `2.2` below. Socket.IO automatically removes a disconnected socket from adapter rooms; the backend must still remove its application room membership and notify any remaining peer during disconnect cleanup.
+
+### 2.2. Full Backend Production Contract & Migration (`BE-0`)
+
+Full backend development (`backend_development_plan.md`) preserves the accepted Backend POC lifecycle (`WaitingForPeer`, `Connected`, `Absent`), equal-peer model, `offerer`/`answerer` negotiation duties, `room:leave`, `peer:left`, `signal:forward`, `signal:receive`, `ice:get`, `ice:credentials`, and `room:error` semantics without breaking the frontend prototype, except for three explicit production extensions:
+
+1. **Security-Driven Room Authorization Migration (`room:create` and `room:join`)**: Because `ship-[a-f0-9]{4}` has only 65,536 values, an unauthenticated `room:join` allows room enumeration and second-peer slot denial of service (`architectural_audit.md` Sections `1.2` and `1.3`). Production defaults `REQUIRE_ROOM_AUTH=true`, requiring `authVerifier` on `room:create` and `authToken` on `room:join`. An explicit `REQUIRE_ROOM_AUTH=false` compatibility toggle may remain available only for non-production local or POC regression tests (`NODE_ENV=production` must reject `REQUIRE_ROOM_AUTH=false` at startup).
+2. **Dynamic TURN Entries in `ice:credentials`**: `ice:credentials` retains the POC `IceCredentialsPayload` shape while adding short-lived HMAC-SHA1 TURN entries (`username`, `credential`) alongside STUN endpoints (`nat_traversal_strategy.md` Section `3`).
+3. **Abuse-Control Error & Operational Limits**: `room:error` adds `RATE_LIMITED`, and `activeRooms` enforces `MAX_ROOMS`, `ROOM_IDLE_TTL_MS`, `ROOM_MAX_LIFETIME_MS`, and per-IP `room:create` rate limiting.
+
+#### 2.2.1. HKDF-Separated Room Authorization Model
+
+Shipri separates room access control from both the short public `roomId` and E2EE file/control encryption keys while keeping all secrets out of HTTP paths, query strings, proxy access logs, and `Referer` headers:
+
+* **URL Fragment Boundary**: Share links use `https://shipri.app/room/<roomId>#key=<masterKeyBase64Url>`. Per RFC 3986, the `#key=` fragment is never transmitted in HTTP requests or WebSocket handshake headers (`security_e2ee_spec.md` Section `2.3`).
+* **One-Way HKDF Domain Derivation**: Before calling `room:create` (before `roomId` exists), the creating client derives a 256-bit (32-byte) room authorization secret from the 256-bit CSPRNG `#key=` master secret (`masterKeyBytes`) using Web Crypto HKDF-SHA256:
+  * `ikm`: `masterKeyBytes` (32 bytes)
+  * `salt`: UTF-8 bytes of `"shipri-room-auth-salt-v1"` (constant domain salt independent of `roomId`)
+  * `info`: UTF-8 bytes of `"shipri-room-auth-v1"`
+  * `length`: `256` bits (`32` bytes)
+* **Cryptographic Separation from E2EE Keys**: `security_e2ee_spec.md` Section `2.2` derives `shipri-board-metadata-v1`, `shipri-control-v1`, and `shipri-file-chunks-v1` AES-GCM keys using per-room `salt: "shipri:${roomId}"` and distinct `info` labels. Because HKDF-SHA256 is one-way with disjoint `salt` and `info` inputs, exposing `authToken` or `authVerifier` to the untrusted signaling server reveals neither `masterKeyBytes` nor any E2EE key, and remains mathematically independent of `ship-[a-f0-9]{4}`.
+* **Client-Side Diagnostic Mode (`FP-6`)**: During Part 3 prototype testing before E2EE is implemented (`frontend_prototype_plan.md` Section `6`), the diagnostic client generates an independent 32-byte CSPRNG `authToken` (never claiming E2EE) or lets a tester override `authToken` manually to exercise authorization failures.
+* **Verifier Hashing & Constant-Time Comparison**:
+  * `authToken` is encoded as unpadded `base64url` (`43` characters matching `/^[A-Za-z0-9_-]{43}$/` for standard 32-byte tokens; server validation accepts non-empty strings from `1` to `256` characters on `room:join` so diagnostic wrong-token inputs trigger `UNAUTHORIZED` rather than `INVALID_PAYLOAD`).
+  * `authVerifier` is the unpadded `base64url` encoding of `SHA-256(utf8(authToken))` (`43` characters matching `/^[A-Za-z0-9_-]{43}$/`, decoding to exactly `32` bytes).
+  * On `room:create`, the client transmits `{ authVerifier }`, never the raw `authToken`. The server decodes `authVerifier` into a 32-byte `Buffer` stored only in `Room.authVerifierHash` (or `null` only when `REQUIRE_ROOM_AUTH=false` and `authVerifier` was omitted).
+  * On `room:join`, when `room.authVerifierHash !== null`, the server computes `candidateHash = crypto.createHash('sha256').update(authToken, 'utf8').digest()` (32 bytes) and compares `crypto.timingSafeEqual(candidateHash, room.authVerifierHash)`. Hashing `authToken` upon join guarantees constant-time 32-byte comparison and ensures even read access to `Room.authVerifierHash` in server memory does not reveal a usable `authToken`.
+
+#### 2.2.2. Frozen Capacity, TTL, Rate-Limit, and Cleanup Defaults
+
+| Parameter | Production Default | Behavior & Enforcement Rule |
+| :--- | :--- | :--- |
+| `REQUIRE_ROOM_AUTH` | `true` | Requires `authVerifier` on `room:create` and `authToken` on `room:join`. Startup fails if set to `false` when `NODE_ENV=production`. |
+| `MAX_ROOMS` | `5000` | Hard cap on concurrent entries in `activeRooms`. After purging expired rooms, `room:create` at or above `MAX_ROOMS` fails with `SERVER_BUSY`. |
+| `ROOM_IDLE_TTL_MS` | `1800000` (30 minutes) | Waiting/idle room expiry window. Initial `expiresAt = Math.min(now + ROOM_IDLE_TTL_MS, maxExpiresAt)`. Refreshed on valid `room:join`, `room:leave` (leaving 1 peer), `disconnect` (leaving 1 peer), `signal:forward`, and `ice:get`. |
+| `ROOM_MAX_LIFETIME_MS` | `14400000` (4 hours) | Hard cap from creation: `maxExpiresAt = createdAt + ROOM_MAX_LIFETIME_MS`. Never extended by room activity. |
+| `ROOM_CLEANUP_INTERVAL_MS` | `60000` (60 seconds) | Periodic sweep interval removing rooms where `now >= room.expiresAt || now >= room.maxExpiresAt`. Lazy expiry checks also run on room lookup before enforcing auth or capacity. |
+| `ROOM_CREATE_RATE_LIMIT_MAX` | `10` | Maximum `room:create` attempts per resolved client IP within `ROOM_CREATE_RATE_LIMIT_WINDOW_MS`. Exceeding emits `room:error` with `RATE_LIMITED`. |
+| `ROOM_CREATE_RATE_LIMIT_WINDOW_MS` | `60000` (60 seconds) | Sliding or fixed rate-limit window per resolved client IP for `room:create`. |
+| `TRUST_PROXY` | `false` | Controls whether Express and Socket.IO IP extraction trusts `X-Forwarded-For`. Direct deployments leave `TRUST_PROXY=false` (ignoring spoofable `X-Forwarded-For`); deployments behind `nginx-proxy` or Caddy configure explicit hop/proxy trust (`1` or trusted proxy spec). |
+
+* **Disconnect Cleanup**: On socket `disconnect`, the server resolves membership in O(1) via `socketRooms`. If the departing socket leaves 1 peer in the room, the server removes the departing socket from `room.peers`, `socketRooms`, and the Socket.IO room, emits `peer:left` (`{ roomId, peerId, reason: 'disconnect' }`) to the remaining peer (which becomes `offerer` for any replacement join), and refreshes `lastActivityAt` / `expiresAt` (`Math.min(now + ROOM_IDLE_TTL_MS, room.maxExpiresAt)`). If 0 peers remain, the server deletes the room immediately from `activeRooms` without emitting `peer:left`.
+* **TTL & Hard-Lifetime Expiry Cleanup**: When a room expires (`now >= room.expiresAt || now >= room.maxExpiresAt`) during either lazy lookup or the periodic cleanup sweep, the server emits `room:error` (`{ roomId, code: 'ROOM_NOT_FOUND', message: 'Room does not exist or has expired.' }`) to any connected socket(s) still in `room.peers`, clears their `socketRooms` entries, removes them from the Socket.IO room (`socket.leave(roomId)`), and deletes the room from `activeRooms`. Subsequent operations against that `roomId` return `ROOM_NOT_FOUND`. Once two peers have established a P2P WebRTC `RTCDataChannel`, ongoing P2P traffic does not traverse the signaling server and is unaffected by signaling expiry unless a peer reconnects or calls `ice:get`.
 
 ---
 
@@ -60,7 +102,7 @@ The Backend POC does not expire a waiting or connected room by TTL and does not 
 
 This section is the canonical Socket.IO contract. Examples use an `{ "event": "...", "payload": ... }` envelope for documentation clarity; actual Socket.IO clients emit the event name with the payload object.
 
-All payloads use `roomId` in camelCase whenever a room identifier is present. The Backend POC implements the contract below with in-memory rooms, socket-membership validation, development STUN-only ICE configuration, and no production authorization. Production authorization, room TTL, rate limits, dynamic TURN credentials, and operational hardening are deferred to full backend development.
+All payloads use `roomId` in camelCase whenever a room identifier is present. The Backend POC implements the baseline contract with in-memory rooms, socket-membership validation, development STUN-only ICE configuration, and `REQUIRE_ROOM_AUTH=false`. Full backend production (`BE-0` through `BE-7`) enables HKDF-separated room authorization (`REQUIRE_ROOM_AUTH=true`), room TTL and max lifetime, per-IP rate limiting, maximum active room capacity (`MAX_ROOMS=5000`), and time-limited HMAC-SHA1 TURN credentials without changing the semantics of `room:created`, `room:joined`, `peer:joined`, `room:leave`, `peer:left`, `signal:forward`, `signal:receive`, or `ice:get`.
 
 The schema declarations below use TypeScript notation for readability only. The current implementation remains JavaScript.
 
@@ -72,6 +114,12 @@ type RoomId = `ship-${string}`; // Must match ship-[a-f0-9]{4}.
 
 // Backend-generated peer identifier. Clients must treat it as opaque.
 type PeerId = string; // Opaque to clients.
+
+// Base64url-encoded 32-byte SHA-256 digest of authToken (43 unpadded chars: /^[A-Za-z0-9_-]{43}$/).
+type RoomAuthVerifier = string;
+
+// Client-derived HKDF room authorization token (43-char base64url in E2EE mode; 1..256 chars accepted for validation).
+type RoomAuthToken = string;
 
 // Deterministic WebRTC offer/answer duty for the initial negotiation only.
 type NegotiationDuty = 'offerer' | 'answerer';
@@ -90,17 +138,28 @@ type IceServer = {
   // STUN or TURN URL, or a browser-supported list of URLs.
   urls: string | string[];
 
-  // Optional TURN username. Omitted for Backend POC STUN-only responses.
+  // Time-limited TURN username (`${expiresAt}:${opaqueRoomPeerTag}`). Omitted for STUN-only entries.
   username?: string;
 
-  // Optional TURN password. Omitted in the Backend POC.
+  // Ephemeral HMAC-SHA1 TURN credential computed from TURN_SHARED_SECRET. Omitted for STUN-only entries.
   credential?: string;
 };
 ```
 
 ### 3.1. Create Room
 
-Client to server:
+Client to server (Full Backend Production with `REQUIRE_ROOM_AUTH=true`):
+
+```json
+{
+  "event": "room:create",
+  "payload": {
+    "authVerifier": "base64url_43_char_sha256_digest_of_room_auth_token"
+  }
+}
+```
+
+Client to server (Backend POC compatibility mode when `REQUIRE_ROOM_AUTH=false`):
 
 ```json
 { "event": "room:create", "payload": {} }
@@ -122,8 +181,12 @@ Server to creating client:
 Schema:
 
 ```typescript
-// Empty request payload. The server creates a new room for the emitting socket.
-type RoomCreatePayload = Record<string, never>;
+// Request payload to create a new room for the emitting socket.
+// Production (REQUIRE_ROOM_AUTH=true) requires `authVerifier`; `{}` is permitted only when REQUIRE_ROOM_AUTH=false.
+interface RoomCreatePayload {
+  // Unpadded base64url SHA-256 digest of the client's roomAuthToken (32 bytes / 43 chars).
+  authVerifier?: RoomAuthVerifier;
+}
 
 // Successful room creation response sent only to the creating peer.
 interface RoomCreatedPayload {
@@ -140,7 +203,19 @@ interface RoomCreatedPayload {
 
 ### 3.2. Join Room
 
-Client to server:
+Client to server (Full Backend Production with `REQUIRE_ROOM_AUTH=true`):
+
+```json
+{
+  "event": "room:join",
+  "payload": {
+    "roomId": "ship-83a1",
+    "authToken": "base64url_43_char_derived_room_auth_token"
+  }
+}
+```
+
+Client to server (Backend POC compatibility mode when `REQUIRE_ROOM_AUTH=false` and room has no `authVerifierHash`):
 
 ```json
 {
@@ -183,6 +258,10 @@ Schema:
 interface RoomJoinPayload {
   // Canonical room ID received out of band from the creator.
   roomId: RoomId;
+
+  // HKDF-derived roomAuthToken (or diagnostic token in prototype FP-6).
+  // Required whenever REQUIRE_ROOM_AUTH=true or the room was created with authVerifier.
+  authToken?: RoomAuthToken;
 }
 
 // Successful join response sent only to the joining peer.
@@ -340,7 +419,7 @@ Client trickle ICE and generation rules for `signal:forward` and `signal:receive
 
 ### 3.5. ICE Credentials
 
-Any active room member (in either `WaitingForPeer` or `Connected` state) may emit `ice:get` after creating or joining a room. The server validates room membership via `socketRooms` and `room.peers` (`UNAUTHORIZED` for non-members) and responds with `ice:credentials` on the requesting socket only, or emits `SERVER_BUSY` if the development STUN configuration is unavailable or invalid.
+Any active room member (in either `WaitingForPeer` or `Connected` state) may emit `ice:get` after creating or joining a room. The server verifies the room is active and non-expired (`ROOM_NOT_FOUND`), confirms room membership via `socketRooms` and `room.peers` (`UNAUTHORIZED` for non-members), and responds with `ice:credentials` on the requesting socket only, or emits `SERVER_BUSY` if the configured STUN or required production TURN configuration is unavailable or invalid.
 
 Client to server:
 
@@ -353,7 +432,7 @@ Client to server:
 }
 ```
 
-Backend POC server to requesting client:
+Backend POC server to requesting client (development STUN-only):
 
 ```json
 {
@@ -366,6 +445,34 @@ Backend POC server to requesting client:
           "stun:stun.l.google.com:19302",
           "stun:stun1.l.google.com:19302"
         ]
+      }
+    ]
+  }
+}
+```
+
+Full Backend Production server to requesting client (STUN + time-limited HMAC-SHA1 TURN):
+
+```json
+{
+  "event": "ice:credentials",
+  "payload": {
+    "roomId": "ship-83a1",
+    "iceServers": [
+      {
+        "urls": [
+          "stun:stun.l.google.com:19302",
+          "stun:stun1.l.google.com:19302"
+        ]
+      },
+      {
+        "urls": [
+          "turn:turn.shipri.app:3478?transport=udp",
+          "turn:turn.shipri.app:3478?transport=tcp",
+          "turns:turn.shipri.app:443?transport=tcp"
+        ],
+        "username": "1785239200:ship-83a1-peer_opaque",
+        "credential": "computed_hmac_sha1_base64_signature"
       }
     ]
   }
@@ -391,7 +498,7 @@ interface IceCredentialsPayload {
 }
 ```
 
-The Backend POC response is development-only and contains STUN servers without credentials. Production may add TURN entries with ephemeral `username` and `credential` values, but must never expose `TURN_SHARED_SECRET`.
+The Backend POC response is development-only and contains STUN servers without credentials. Full backend production appends TURN entries derived from `TURN_URLS`, `TURN_CREDENTIAL_TTL_SECONDS`, and `TURN_SHARED_SECRET` (`nat_traversal_strategy.md` Section `3`), fails closed with `SERVER_BUSY` when required TURN configuration is missing or invalid in production, and never exposes `TURN_SHARED_SECRET` in client responses or logs.
 
 ### 3.6. Stable Errors
 
@@ -415,7 +522,7 @@ Schema:
 ```typescript
 // Stable machine-readable error codes. Clients should branch on these values.
 type RoomErrorCode =
-  // Requested room does not exist or has already been removed.
+  // Requested room does not exist, has been deleted, or has expired by TTL/lifetime.
   | 'ROOM_NOT_FOUND'
 
   // Requested room already has two active peers.
@@ -424,19 +531,22 @@ type RoomErrorCode =
   // Required room ID is missing, is not a string, or does not match the canonical format.
   | 'INVALID_ROOM_ID'
 
-  // Event payload has an invalid top-level shape or invalid non-room fields.
+  // Event payload has an invalid top-level shape or invalid non-room fields (including missing/malformed auth fields).
   | 'INVALID_PAYLOAD'
 
-  // Socket membership does not permit the requested room operation.
+  // Socket membership or room authorization token does not permit the requested room operation.
   | 'UNAUTHORIZED'
 
   // Operation requires another active peer, but none is available.
   | 'PEER_UNAVAILABLE'
 
-  // Backend cannot complete the operation because a required service or configuration is unavailable.
+  // Client IP exceeded the room:create rate-limit budget for the current window.
+  | 'RATE_LIMITED'
+
+  // Backend cannot complete the operation because MAX_ROOMS capacity or ICE/TURN configuration is unavailable.
   | 'SERVER_BUSY';
 
-// Standard error payload for room, membership, validation, and service failures.
+// Standard error payload for room, membership, validation, rate-limit, and service failures.
 interface RoomErrorPayload {
   // Present when the failed operation was associated with a valid room ID.
   roomId?: RoomId;
@@ -449,35 +559,44 @@ interface RoomErrorPayload {
 }
 ```
 
-The Backend POC validates requests in this order and returns the first matching error:
+Validation precedence order:
 
-1. Validate the top-level payload shape and non-room fields.
-2. Validate the required `roomId`.
-3. Verify that the room exists.
-4. Verify that the socket's current membership permits the operation.
-5. Verify room capacity or peer availability.
-6. Verify that the required backend configuration is available.
+* **For `room:create` (Full Backend Production)**:
+  1. **Rate limit check (`RATE_LIMITED`)**: verify the resolved client IP (respecting `TRUST_PROXY`) has remaining `ROOM_CREATE_RATE_LIMIT_MAX` budget within `ROOM_CREATE_RATE_LIMIT_WINDOW_MS`.
+  2. **Payload shape and field check (`INVALID_PAYLOAD`)**: verify plain object with no unsupported keys and valid `authVerifier` (43-char unpadded `base64url` SHA-256 digest when `REQUIRE_ROOM_AUTH=true`, or optional valid `authVerifier` / `{}` when `REQUIRE_ROOM_AUTH=false`).
+  3. **Socket membership check (`UNAUTHORIZED`)**: reject if the socket already belongs to an active room.
+  4. **Room capacity check (`SERVER_BUSY`)**: after purging any expired rooms, reject if `activeRooms.size >= MAX_ROOMS`.
+* **For room-targeted events (`room:join`, `room:leave`, `signal:forward`, `ice:get`)**:
+  1. **Payload shape and non-`roomId` fields (`INVALID_PAYLOAD`)**: plain object, no unsupported fields, non-empty `authToken` (`1..256` chars) on `room:join` when `REQUIRE_ROOM_AUTH=true`, and plain-object `signalData` on `signal:forward`.
+  2. **Canonical `roomId` format (`INVALID_ROOM_ID`)**: string matching `^ship-[a-f0-9]{4}$`.
+  3. **Active room & lazy TTL/lifetime check (`ROOM_NOT_FOUND`)**: room must exist and satisfy `now < room.expiresAt && now < room.maxExpiresAt`; expired rooms are deleted before rejecting with `ROOM_NOT_FOUND`.
+  4. **Room authorization and membership (`UNAUTHORIZED`)**: on `room:join`, reject if the socket already belongs to a room OR if `room.authVerifierHash !== null` and `SHA-256(authToken)` fails `crypto.timingSafeEqual` against `room.authVerifierHash`; on `room:leave`, `signal:forward`, and `ice:get`, reject if the socket is not an active member of `roomId`. (Checking `authToken` before `ROOM_FULL` prevents unauthenticated room-occupancy enumeration.)
+  5. **Room capacity or peer availability (`ROOM_FULL` / `PEER_UNAVAILABLE`)**: on `room:join`, reject when `room.peers.length >= 2`; on `signal:forward`, reject when `room.peers.length < 2`.
+  6. **ICE/TURN service configuration (`SERVER_BUSY`)**: on `ice:get`, reject when STUN or required production TURN configuration is missing or invalid.
 
-| Code | POC events | Triggering condition |
+(The Backend POC follows the same room-targeted precedence without rate limiting, room authorization tokens, TTL expiry checks, or `MAX_ROOMS` capacity limits.)
+
+| Code | Applicable events | Triggering condition |
 | :--- | :--- | :--- |
-| `INVALID_PAYLOAD` | All client-to-server events | The payload is not a plain object, contains unsupported top-level fields, or has an invalid required field other than `roomId`. For `signal:forward`, this includes a missing or non-object `signalData`. |
+| `INVALID_PAYLOAD` | All client-to-server events | The payload is not a plain object, contains unsupported top-level fields, or has an invalid required field other than `roomId` (such as missing/malformed `authVerifier` on `room:create`, missing/empty/oversized `authToken` on `room:join` when `REQUIRE_ROOM_AUTH=true`, or missing/non-object `signalData` on `signal:forward`). |
 | `INVALID_ROOM_ID` | `room:join`, `room:leave`, `signal:forward`, `ice:get` | `roomId` is missing, is not a string, or does not match `^ship-[a-f0-9]{4}$`. |
-| `ROOM_NOT_FOUND` | `room:join`, `room:leave`, `signal:forward`, `ice:get` | The validated `roomId` has no active in-memory room. |
-| `UNAUTHORIZED` | `room:create`, `room:join`, `room:leave`, `signal:forward`, `ice:get` | A socket that already belongs to a Shipri room tries to create or join another room, or a socket that is not a member of the specified room tries to leave, relay a signal, or fetch ICE configuration. |
-| `ROOM_FULL` | `room:join` | An otherwise eligible socket tries to join a room that already has two active peers. |
+| `RATE_LIMITED` | `room:create` | The resolved client IP exceeded `ROOM_CREATE_RATE_LIMIT_MAX` within `ROOM_CREATE_RATE_LIMIT_WINDOW_MS`. |
+| `ROOM_NOT_FOUND` | `room:join`, `room:leave`, `signal:forward`, `ice:get` (plus periodic expiry notice) | The validated `roomId` has no active in-memory room, or the room expired via `ROOM_IDLE_TTL_MS` or `ROOM_MAX_LIFETIME_MS`. |
+| `UNAUTHORIZED` | `room:create`, `room:join`, `room:leave`, `signal:forward`, `ice:get` | A socket that already belongs to a Shipri room tries to create or join another room, a `room:join` presents an invalid `authToken` against `room.authVerifierHash`, or a non-member socket tries to leave, relay a signal, or fetch ICE configuration. |
+| `ROOM_FULL` | `room:join` | An authorized, unaffiliated socket tries to join a room that already has two active peers. |
 | `PEER_UNAVAILABLE` | `signal:forward` | An active room member tries to relay signaling data while no second peer is present. |
-| `SERVER_BUSY` | `ice:get` | The Backend POC development ICE configuration is missing or invalid, so the server cannot return a usable `iceServers` response. |
+| `SERVER_BUSY` | `room:create`, `ice:get` | On `room:create`, active non-expired room count reached `MAX_ROOMS`; on `ice:get`, STUN or required production TURN configuration is missing or invalid. |
 
-An error does not mutate room or socket membership. The server emits `room:error` only to the socket that requested the failed operation. When `roomId` was supplied and passed format validation, the error includes it even if no room exists; otherwise `roomId` is omitted. A disconnected socket cannot receive `room:error`, so disconnect cleanup is defined only by the lifecycle transitions above.
+An error does not mutate room or socket membership (except removing an already-expired room discovered during lazy expiry cleanup). The server emits `room:error` only to the socket that requested the failed operation (or to attached members of a room removed by TTL expiry). When `roomId` was supplied and passed format validation, the error includes it even if no room exists; otherwise `roomId` is omitted. A disconnected socket cannot receive `room:error`, so disconnect cleanup is defined only by the lifecycle transitions above.
 
 ### 3.7. Frontend Prototype Client Contract Mapping
 
-The Part 2 Frontend Prototype (`frontend_prototype_plan.md` Section `4`) consumes Sections `2.1` and `3.1` through `3.6` of this specification directly against the Backend POC without mock signaling assumptions:
+The Part 2 Frontend Prototype (`frontend_prototype_plan.md` Section `4`) consumes Sections `2.1` and `3.1` through `3.6` of this specification directly against the Backend POC without mock signaling assumptions. During Part 3 (`FP-5` and `FP-6` in `frontend_prototype_plan.md` Section `6`), the prototype expands to supply diagnostic `authVerifier` / `authToken` inputs, surface `RATE_LIMITED` and expired `ROOM_NOT_FOUND` errors, validate STUN+TURN `ice:credentials`, and test selectable `iceTransportPolicy: "all" | "relay"`:
 
 * **Equal-Peer Negotiation Boundary**: `room:create` (`negotiationDuty: "offerer"`) and `room:join` (`negotiationDuty: "answerer"`) establish initial WebRTC SDP and single-channel (`"shipri-diagnostic"`) negotiation duties only between two equal peers. Negotiation duty never restricts application messages in the prototype or determines which peer may publish or download files in the final product.
 * **Trickle ICE & Immediate Signaling Flow**: The `offerer` creates the initial `RTCPeerConnection` and `"shipri-diagnostic"` channel, calls `setLocalDescription()`, and forwards the SDP offer immediately without waiting for ICE gathering to finish; the `answerer` replies immediately after `setLocalDescription()` as well. Both peers trickle ICE candidates as produced, queue early remote candidates until `setRemoteDescription()` completes, and use the 5-second (`5000ms`) ICE gathering bound solely to surface stalled-gathering diagnostics without blocking valid SDP exchange.
 * **Replacement-Peer Re-Offerer Promotion & Generation Isolation**: When a connected peer receives `peer:left` (`reason: "leave" | "disconnect"`), the remaining peer immediately closes its `RTCPeerConnection` and `RTCDataChannel`, cancels gathering timers, invalidates the negotiation generation, retires the departed `peerId`, remains in `WaitingForPeer`, and starts a fresh negotiation generation as `"offerer"` when a replacement peer triggers `peer:joined`. Inbound SDP and ICE candidates are accepted only for the active room, current remote `peerId`, and matching generation; late events from replaced negotiations are ignored.
-* **Client-Side State & Sanitized Logging**: The prototype branches on `room:error` `code` values rather than `message`, preserves active room state when an error is returned, and redacts raw SDP payloads, ICE credentials, secrets, and diagnostic message bodies from logs.
+* **Client-Side State & Sanitized Logging**: The prototype branches on `room:error` `code` values rather than `message`, preserves active room state when an error is returned, and redacts raw SDP payloads, ICE credentials, auth tokens, secrets, and diagnostic message bodies from logs.
 * **Out-of-Band WebRTC vs. Deferred Production Scope**: Prototype `ping`, `pong`, and short diagnostic `text` payloads travel solely over the direct WebRTC `RTCDataChannel` and never cross the signaling server. Production room authorization and dynamic TURN credentials are added in Part 3 (`backend_development_plan.md`), while E2EE, the encrypted shared file board, and file transfers remain deferred to Part 4 (`frontend_development_plan.md`).
 
 ---
@@ -507,11 +626,27 @@ interface Room {
   // Active connected peers. Capacity is exactly two.
   peers: RoomPeer[];
 
+  // 32-byte SHA-256 verifier digest for constant-time room:join verification.
+  // Omitted or null only in non-production Backend POC compatibility mode (REQUIRE_ROOM_AUTH=false).
+  authVerifierHash: Buffer | null;
+
   // Millisecond timestamp when the room was created.
   createdAt: number;
 
-  // Production-only millisecond expiry timestamp. Omitted by the Backend POC.
-  expiresAt?: number;
+  // Millisecond timestamp of the most recent valid room activity (production TTL tracking).
+  lastActivityAt: number;
+
+  // Millisecond idle/waiting expiry timestamp (lastActivityAt + ROOM_IDLE_TTL_MS, clamped to maxExpiresAt).
+  expiresAt: number;
+
+  // Millisecond hard-cap expiry timestamp (createdAt + ROOM_MAX_LIFETIME_MS).
+  maxExpiresAt: number;
+}
+
+// Per-IP sliding/fixed-window rate-limit counter for room:create (in-memory only).
+interface RoomCreateRateBucket {
+  count: number;
+  windowResetAt: number;
 }
 
 // Primary in-memory room store keyed by canonical roomId.
@@ -519,9 +654,12 @@ type RoomStore = Map<RoomId, Room>;
 
 // Reverse socket-to-room index for O(1) membership and disconnect lookups.
 type SocketRoomIndex = Map<string, RoomId>;
+
+// Ephemeral in-memory rate-limit map keyed by resolved client IP (never persisted or logged).
+type RoomCreateRateStore = Map<string, RoomCreateRateBucket>;
 ```
 
-`activeRooms` (`RoomStore`) and `socketRooms` (`SocketRoomIndex`) remain synchronized across every valid `room:create`, `room:join`, `room:leave`, `disconnect`, and room-deletion transition, while rejected operations leave both maps unchanged. Disconnect cleanup and active-membership checks resolve a socket's room through `socketRooms` without scanning unrelated entries in `activeRooms`, and both maps are cleared when the server closes.
+`activeRooms` (`RoomStore`) and `socketRooms` (`SocketRoomIndex`) remain synchronized across every valid `room:create`, `room:join`, `room:leave`, `disconnect`, TTL expiry, and room-deletion transition, while rejected operations leave both maps unchanged. Disconnect cleanup and active-membership checks resolve a socket's room through `socketRooms` without scanning unrelated entries in `activeRooms`, and both maps plus rate-limit timers/stores are cleared when the server closes.
 
 The backend stores no file-board or transfer state.
 
@@ -529,8 +667,8 @@ The backend stores no file-board or transfer state.
 
 ## 5. Security and Validation
 
-* Validate every payload and room membership before relaying.
+* Validate every payload, authorization verifier/token, and room membership before relaying.
 * `signal:forward` verifies active room membership for the sender via `socketRooms` and `room.peers` (`UNAUTHORIZED` if not an active member), requires a second active peer (`PEER_UNAVAILABLE` if absent), and emits `signal:receive` (`{ roomId, peerId, signalData }`) directly to the other active peer's socket without inspecting, logging, or mutating `signalData`.
-* Treat peer and socket identifiers as opaque operational data.
-* Do not log SDP bodies, ICE credentials, authorization tokens, E2EE keys, file metadata, or transfer payloads.
-* Apply production authorization, CORS, rate limits, room limits, and TTL as defined by the backend and security plans.
+* Treat peer and socket identifiers as opaque operational data; omit unnecessary `socket.id` values and raw client IP addresses from production operational logs.
+* Never log `authToken`, `authVerifier`, `authVerifierHash`, `TURN_SHARED_SECRET`, TURN `username` or `credential`, SDP bodies, ICE candidates, URL `#key=` fragments, E2EE keys, file metadata, or transfer payloads.
+* Apply production authorization, CORS, `TRUST_PROXY`, rate limits, `MAX_ROOMS`, idle TTL, and hard room lifetime as defined by `backend_development_plan.md` and `security_audit_open_source.md`.
