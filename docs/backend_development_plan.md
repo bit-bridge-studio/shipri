@@ -32,15 +32,28 @@ Full backend development begins only after:
 
 ### BE-0: Finalize Contracts and Prototype Scenarios
 
+**Status:** Completed (`2026-11-23`) - synchronized full backend contracts across `signaling_protocol_spec.md`, `security_audit_open_source.md`, `nat_traversal_strategy.md`, `deployment_docker_spec.md`, and `frontend_prototype_plan.md` (`FP-5` / `FP-6`) without runtime code edits.
+
 **Work:**
 
-* Define the room authorization model independently from the short public room ID.
-* Migrate the accepted POC contract without breaking the frontend prototype unless a documented security correction requires it.
-* Freeze Socket.IO event schemas, validation rules, stable error codes, and disconnect behavior.
-* Define room TTL, maximum lifetime, capacity, rate limits, and maximum active room count.
-* Define environment-driven ICE server and TURN credential responses.
-* Confirm that every backend acceptance scenario is exposed by `frontend_prototype_plan.md`.
+* Define the room authorization model independently from the short public room ID (`shipri-room-auth-v1` HKDF-SHA256 domain separation from `#key=...` with `authVerifier` / `authToken` SHA-256 verification).
+* Migrate the accepted POC contract via `REQUIRE_ROOM_AUTH` / `REQUIRE_TURN` without breaking the frontend prototype (`FP-G1`) unless a documented security correction requires it.
+* Freeze Socket.IO event schemas, validation precedence, stable error codes (adding `RATE_LIMITED`), and O(1) disconnect/cleanup behavior.
+* Define room TTL (`ROOM_IDLE_TTL_MS = 1800000`), maximum lifetime (`ROOM_MAX_LIFETIME_MS = 14400000`), cleanup interval (`ROOM_CLEANUP_INTERVAL_MS = 60000`), capacity (`2` peers per room), rate limits (`ROOM_CREATE_RATE_LIMIT_MAX = 10` / `ROOM_CREATE_RATE_LIMIT_WINDOW_MS = 60000` under `TRUST_PROXY`), and maximum active room count (`MAX_ROOMS = 5000`).
+* Define environment-driven ICE server (`STUN_URLS`, `TURN_URLS`, `TURN_SHARED_SECRET`, `TURN_CREDENTIAL_TTL_SECONDS = 7200`, `REQUIRE_TURN`) and TURN credential response contracts.
+* Confirm that every backend acceptance scenario is exposed by `frontend_prototype_plan.md` (`FP-5` and `FP-6`).
 * Synchronize `signaling_protocol_spec.md`, `security_audit_open_source.md`, `nat_traversal_strategy.md`, and `deployment_docker_spec.md`.
+
+**Synchronized Contract Traceability (`BE-1` through `BE-7`):**
+
+| Stage | Primary Canonical Contracts | Prototype Verification Coverage |
+| :--- | :--- | :--- |
+| `BE-1` | `deployment_docker_spec.md` (Section `6`), `signaling_protocol_spec.md` (`2.2`, `3.6`) | `FP-G1` health/CORS baseline & live server harness |
+| `BE-2` | `signaling_protocol_spec.md` (`2.1`, `2.2`, `3.1` - `3.6`, `4`), `security_audit_open_source.md` (`2.4`, `3.1`, `3.2`) | `FP-6` authorized create/join, rejection matrix, TTL/cleanup |
+| `BE-3` | `security_audit_open_source.md` (`3.1` - `3.3`), `signaling_protocol_spec.md` (`2.2`, `3.6`, `5`) | `FP-6` `RATE_LIMITED` / `SERVER_BUSY` & redacted log inspection |
+| `BE-4` | `nat_traversal_strategy.md` (`3`), `signaling_protocol_spec.md` (`3.5`), `security_audit_open_source.md` (`4.1`) | `FP-5` dynamic TURN `ice:get` & `SERVER_BUSY` fail-closed check |
+| `BE-5` / `BE-6` | `deployment_docker_spec.md` (`2` - `6`), `nat_traversal_strategy.md` (`2`, `4`, `5`) | `FP-5` forced `iceTransportPolicy: "relay"` & direct P2P check |
+| `BE-7` | All specifications above plus `architectural_audit.md` | `FP-6` full Backend Acceptance Gate scenario matrix |
 
 **Exit criteria:**
 
