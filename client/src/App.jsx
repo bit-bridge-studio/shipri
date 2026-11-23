@@ -1,6 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  DIAGNOSTIC_CHANNEL_LABEL,
+  MAX_DIAGNOSTIC_TEXT_LENGTH,
+  createDiagnosticChannelController,
+  createInitialDiagnosticChannelState,
+} from './prototype/diagnostic-channel.js';
+import {
   applyConnectionStatus,
+  applyDiagnosticChannelState,
   applyWebRtcState,
   bindSignalingClient,
   clearEventLog,
@@ -103,7 +110,9 @@ function resolveDisconnectNotice({
 function App({ signalingClient, initialState } = {}) {
   const clientRef = useRef(signalingClient ?? null);
   const webrtcHarnessRef = useRef(null);
+  const diagnosticChannelRef = useRef(null);
   const [joinRoomId, setJoinRoomId] = useState('');
+  const [diagnosticText, setDiagnosticText] = useState('');
   const [prototypeState, setPrototypeState] = useState(() => {
     const baseState = createInitialPrototypeState(initialState);
     return signalingClient
@@ -116,11 +125,23 @@ function App({ signalingClient, initialState } = {}) {
     const ownsClient = !signalingClient;
     clientRef.current = client;
     const unbind = bindSignalingClient(client, setPrototypeState);
+    const channelController = createDiagnosticChannelController({
+      signalingClient: client,
+      onStateChange: (nextChannelState) => {
+        setPrototypeState((prev) =>
+          applyDiagnosticChannelState(prev, nextChannelState),
+        );
+      },
+    });
+    diagnosticChannelRef.current = channelController;
+
     const harness = createWebRtcHarness({
       signalingClient: client,
       onStateChange: (nextWebRtcState) => {
         setPrototypeState((prev) => applyWebRtcState(prev, nextWebRtcState));
       },
+      onDataChannel: (channel, meta) =>
+        channelController.attachChannel(channel, meta),
     });
     webrtcHarnessRef.current = harness;
 
@@ -131,6 +152,8 @@ function App({ signalingClient, initialState } = {}) {
     return () => {
       harness.dispose();
       webrtcHarnessRef.current = null;
+      channelController.dispose();
+      diagnosticChannelRef.current = null;
       unbind();
       if (ownsClient) {
         client.dispose();
@@ -150,19 +173,29 @@ function App({ signalingClient, initialState } = {}) {
     lastError,
     iceDiagnostics: rawIceDiagnostics = null,
     webrtc: rawWebRtc = null,
+    diagnosticChannel: rawDiagnosticChannel = null,
     eventLog,
   } = prototypeState;
   const iceDiagnostics =
     rawIceDiagnostics ?? createInitialIceDiagnosticsState();
   const webrtc = rawWebRtc ?? createInitialWebRtcState();
+  const diagnosticChannel =
+    rawDiagnosticChannel ?? createInitialDiagnosticChannelState();
 
   useEffect(() => {
     if (roomId) {
       setJoinRoomId('');
+    } else {
+      setDiagnosticText('');
     }
   }, [roomId]);
 
   const socketConnected = connectionStatus === 'connected';
+  const channelOpen =
+    socketConnected &&
+    Boolean(roomId) &&
+    peerState === 'connected' &&
+    diagnosticChannel.channelState === 'open';
   const statusBannerText = getConnectionStatusBanner(connectionStatus);
   const errorDescriptor = lastError
     ? resolveRoomErrorDescriptor(lastError)
@@ -232,13 +265,34 @@ function App({ signalingClient, initialState } = {}) {
     void harness.startNegotiation();
   };
 
+  const handleSendPing = () => {
+    const controller = diagnosticChannelRef.current;
+    if (!controller || !channelOpen) {
+      return;
+    }
+    controller.sendPing();
+  };
+
+  const handleSendText = (event) => {
+    event.preventDefault();
+    const controller = diagnosticChannelRef.current;
+    if (!controller || !channelOpen) {
+      return;
+    }
+    const result = controller.sendText(diagnosticText);
+    if (result?.ok) {
+      setDiagnosticText('');
+    }
+  };
+
   const handleClearError = () => {
-    if (!lastError) {
+    if (!lastError && !diagnosticChannel.lastError) {
       return;
     }
     if (shouldClearDraftRoomInput(prototypeState)) {
       setJoinRoomId('');
     }
+    diagnosticChannelRef.current?.clearError();
     setPrototypeState((prev) => recoverErrorState(prev));
   };
 
@@ -704,6 +758,160 @@ function App({ signalingClient, initialState } = {}) {
             </span>
           </div>
         ) : null}
+      </section>
+
+      <section
+        className="diagnostic-channel"
+        aria-label="Diagnostic data channel"
+      >
+        <div className="diagnostic-channel-header">
+          <h2 className="diagnostic-channel-title">Diagnostic Data Channel</h2>
+          <p className="diagnostic-channel-note">
+            Once the shipri-diagnostic channel is open, either equal peer can
+            initiate ping/pong and short text messages regardless of room-entry
+            role or signaling negotiation duty.
+          </p>
+        </div>
+
+        <div className="diagnostic-channel-actions">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={handleSendPing}
+            disabled={!channelOpen}
+          >
+            Send Ping
+          </button>
+
+          <form className="diagnostic-channel-form" onSubmit={handleSendText}>
+            <label className="sr-only" htmlFor="diagnostic-channel-text">
+              Short diagnostic message
+            </label>
+            <input
+              id="diagnostic-channel-text"
+              name="diagnosticText"
+              type="text"
+              className="diagnostic-channel-input"
+              value={diagnosticText}
+              onChange={(event) => setDiagnosticText(event.target.value)}
+              placeholder={`Short message (max ${MAX_DIAGNOSTIC_TEXT_LENGTH} chars)`}
+              aria-label="Short diagnostic message"
+              maxLength={MAX_DIAGNOSTIC_TEXT_LENGTH}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={!channelOpen}
+            />
+            <button
+              type="submit"
+              className="btn-secondary"
+              disabled={!channelOpen || diagnosticText.trim() === ''}
+            >
+              Send Text
+            </button>
+          </form>
+        </div>
+
+        <div className="diagnostic-channel-summary-grid">
+          <div className="status-card">
+            <span className="status-label">Channel State</span>
+            <span
+              className={`status-value${
+                diagnosticChannel.channelState === 'none'
+                  ? ' status-value--muted'
+                  : ''
+              }`}
+            >
+              {diagnosticChannel.channelState}
+            </span>
+            <span className="status-hint">
+              {diagnosticChannel.label ?? DIAGNOSTIC_CHANNEL_LABEL}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Last RTT</span>
+            <span
+              className={`status-value${
+                diagnosticChannel.lastRttMs === null
+                  ? ' status-value--muted'
+                  : ''
+              }`}
+            >
+              {diagnosticChannel.lastRttMs !== null
+                ? `${diagnosticChannel.lastRttMs} ms`
+                : 'None'}
+            </span>
+            <span className="status-hint">
+              {`Pings: ${diagnosticChannel.pingsSent} / Pongs: ${diagnosticChannel.pongsReceived} / Pending: ${diagnosticChannel.pendingPingCount}`}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Message Counters</span>
+            <span className="status-value">
+              {`Out: ${diagnosticChannel.messagesSent} / In: ${diagnosticChannel.messagesReceived}`}
+            </span>
+            <span className="status-hint">
+              {diagnosticChannel.messages.length === 1
+                ? '1 recorded message'
+                : `${diagnosticChannel.messages.length} recorded messages`}
+            </span>
+          </div>
+        </div>
+
+        {diagnosticChannel.lastError ? (
+          <div
+            className="ice-diagnostics-error"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="event-log-badge event-log-badge--error">
+              {diagnosticChannel.lastError.code}
+            </span>
+            <span className="ice-diagnostics-error-text">
+              {diagnosticChannel.lastError.message}
+            </span>
+          </div>
+        ) : null}
+
+        {diagnosticChannel.messages.length === 0 ? (
+          <p className="event-log-empty">
+            No diagnostic data-channel messages exchanged yet.
+          </p>
+        ) : (
+          <ol className="diagnostic-channel-messages">
+            {diagnosticChannel.messages.map((message, index) => (
+              <li
+                key={`${message.id}-${message.direction}-${message.type}-${index}`}
+                className="event-log-item"
+              >
+                <div className="event-log-row">
+                  <time
+                    className="event-log-timestamp"
+                    dateTime={message.timestamp}
+                  >
+                    {message.timestamp}
+                  </time>
+                  <span
+                    className={`event-log-badge event-log-badge--${message.direction}`}
+                  >
+                    {message.direction}
+                  </span>
+                  <span className="event-log-name">{message.type}</span>
+                  <span className="event-log-badge">{message.id}</span>
+                  {message.rttMs !== undefined ? (
+                    <span className="event-log-badge">
+                      {`${message.rttMs} ms`}
+                    </span>
+                  ) : null}
+                </div>
+                {message.body !== undefined ? (
+                  <p className="event-log-summary">{message.body}</p>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        )}
       </section>
 
       <section
