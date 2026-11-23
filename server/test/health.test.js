@@ -1,43 +1,26 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { createSignalingServer } from '../src/server.js';
 import {
   closeSocketClients,
   createSocketClient,
 } from './helpers/socket-client.js';
+import {
+  closeIsolatedServers,
+  startIsolatedServer,
+} from './helpers/test-server.js';
 
 const clients = new Set();
 const servers = new Set();
-
-async function startIsolatedServer(options) {
-  const server = createSignalingServer(options);
-  servers.add(server);
-
-  await new Promise((resolve, reject) => {
-    server.httpServer.once('error', reject);
-    server.httpServer.listen(0, '127.0.0.1', () => {
-      server.httpServer.off('error', reject);
-      resolve();
-    });
-  });
-
-  const address = server.httpServer.address();
-  return {
-    ...server,
-    baseUrl: `http://127.0.0.1:${address.port}`,
-  };
-}
 
 afterEach(async () => {
   closeSocketClients(...clients);
   clients.clear();
 
-  await Promise.all([...servers].map((server) => server.close()));
-  servers.clear();
+  await closeIsolatedServers(servers);
 });
 
 describe('GET /health', () => {
   test('returns 200 JSON with no-store cache header and baseline service status', async () => {
-    const server = await startIsolatedServer();
+    const server = await startIsolatedServer(undefined, servers);
 
     const response = await fetch(`${server.baseUrl}/health`);
     const body = await response.json();
@@ -52,7 +35,18 @@ describe('GET /health', () => {
   });
 
   test('reflects active room count without exposing room IDs, socket IDs, ICE config, or secrets', async () => {
-    const server = await startIsolatedServer();
+    const server = await startIsolatedServer(
+      {
+        env: {
+          NODE_ENV: 'test',
+          ALLOWED_ORIGINS: 'http://localhost:3000',
+          STUN_URLS: 'stun:stun.l.google.com:19302',
+          TURN_URLS: 'turn:turn.shipri.app:3478?transport=udp',
+          TURN_SHARED_SECRET: 'health_check_hidden_secret',
+        },
+      },
+      servers,
+    );
     const client = await createSocketClient(server.baseUrl);
     clients.add(client);
 
@@ -82,6 +76,8 @@ describe('GET /health', () => {
 
     expect(rawText).not.toContain(created.roomId);
     expect(rawText).not.toContain(client.id);
+    expect(rawText).not.toContain('turn.shipri.app');
+    expect(rawText).not.toContain('health_check_hidden_secret');
     for (const stunUrl of server.config.stunUrls) {
       expect(rawText).not.toContain(stunUrl);
     }
