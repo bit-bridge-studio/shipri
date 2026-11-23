@@ -222,7 +222,8 @@ export function createInitialWebRtcState(overrides = {}) {
  *   },
  *   peerConnectionFactory?: (config: { iceServers: Array<{ urls: string | string[] }>, iceTransportPolicy: string, roomId: string, peerId: string, generation: number }) => RTCPeerConnection,
  *   onStateChange?: (state: ReturnType<typeof createInitialWebRtcState>) => void,
- *   onDataChannel?: (channel: RTCDataChannel, meta: { role: 'offerer' | 'answerer', generation: number, peerId: string }) => void,
+ *   onDataChannel?: (channel: RTCDataChannel, meta: { role: 'offerer' | 'answerer', generation: number, peerId: string }) => void | ((reason?: string) => void),
+ *   onDataChannelClose?: (channel: RTCDataChannel, meta: { reason: string, generation: number | null, peerId: string | null }) => void,
  *   onError?: (error: { code: string, message: string, roomId?: string }) => void,
  *   setTimer?: (fn: () => void, ms: number) => unknown,
  *   clearTimer?: (id: unknown) => void,
@@ -242,6 +243,7 @@ export function createWebRtcHarness(options = {}) {
     peerConnectionFactory,
     onStateChange,
     onDataChannel,
+    onDataChannelClose,
     onError,
   } = options;
 
@@ -295,6 +297,7 @@ export function createWebRtcHarness(options = {}) {
 
   let activePc = null;
   let activeDataChannel = null;
+  let activeDataChannelCleanup = null;
   let localGeneration = 0;
   let activeSessionGeneration = null;
   let expectedRemoteGeneration = null;
@@ -372,13 +375,26 @@ export function createWebRtcHarness(options = {}) {
     );
   }
 
-  function detachDataChannel(channel) {
+  function detachDataChannel(channel, detachReason = 'closed') {
     if (!channel) {
       return;
     }
+    const cleanup = activeDataChannelCleanup;
+    activeDataChannelCleanup = null;
     channel.onopen = null;
     channel.onclose = null;
     channel.onerror = null;
+    channel.onmessage = null;
+    if (typeof cleanup === 'function') {
+      cleanup(detachReason);
+    }
+    if (typeof onDataChannelClose === 'function') {
+      onDataChannelClose(channel, {
+        reason: detachReason,
+        generation: activeSessionGeneration,
+        peerId: activeRemotePeerId,
+      });
+    }
   }
 
   function attachDataChannel(channel, role, sessionGen, pc) {
@@ -387,7 +403,7 @@ export function createWebRtcHarness(options = {}) {
     }
 
     if (activeDataChannel && activeDataChannel !== channel) {
-      detachDataChannel(activeDataChannel);
+      detachDataChannel(activeDataChannel, 'replaced');
     }
     activeDataChannel = channel;
 
@@ -428,11 +444,14 @@ export function createWebRtcHarness(options = {}) {
     };
 
     if (typeof onDataChannel === 'function') {
-      onDataChannel(channel, {
+      const cleanup = onDataChannel(channel, {
         role,
         generation: sessionGen,
         peerId: activeRemotePeerId,
       });
+      if (typeof cleanup === 'function' && activeDataChannel === channel) {
+        activeDataChannelCleanup = cleanup;
+      }
     }
   }
 
@@ -448,13 +467,13 @@ export function createWebRtcHarness(options = {}) {
     pc.ondatachannel = null;
   }
 
-  function closeActiveResources() {
+  function closeActiveResources(detachReason = 'closed') {
     clearIceGatheringTimer();
 
     const channel = activeDataChannel;
     activeDataChannel = null;
     if (channel) {
-      detachDataChannel(channel);
+      detachDataChannel(channel, detachReason);
       if (channel.readyState !== 'closed' && typeof channel.close === 'function') {
         try {
           channel.close();
@@ -488,7 +507,7 @@ export function createWebRtcHarness(options = {}) {
     preserveStaleCount = true,
   } = {}) {
     const hadDataChannel = activeDataChannel !== null;
-    closeActiveResources();
+    closeActiveResources(nextStatus === 'idle' ? 'reset' : 'closed');
 
     activeSessionGeneration = null;
     expectedRemoteGeneration = null;
@@ -519,7 +538,7 @@ export function createWebRtcHarness(options = {}) {
   }
 
   function resetAllRoomState() {
-    closeActiveResources();
+    closeActiveResources('reset');
     activeRoomId = null;
     peerState = 'unaffiliated';
     negotiationDuty = null;
@@ -800,7 +819,7 @@ export function createWebRtcHarness(options = {}) {
     }
 
     pendingNegotiation = false;
-    closeActiveResources();
+    closeActiveResources('replaced');
 
     localGeneration += 1;
     const sessionGen = localGeneration;
@@ -933,7 +952,7 @@ export function createWebRtcHarness(options = {}) {
     }
 
     pendingOffer = null;
-    closeActiveResources();
+    closeActiveResources('replaced');
 
     localGeneration += 1;
     const sessionGen = localGeneration;
@@ -1280,7 +1299,7 @@ export function createWebRtcHarness(options = {}) {
       return;
     }
 
-    closeActiveResources();
+    closeActiveResources('replaced');
     retiredPeerIds.delete(peerId);
     activeRemotePeerId = peerId;
     peerState = 'connected';
@@ -1565,7 +1584,7 @@ export function createWebRtcHarness(options = {}) {
       return;
     }
     disposed = true;
-    closeActiveResources();
+    closeActiveResources('dispose');
     for (const unsubscribe of unsubscribers) {
       unsubscribe();
     }
