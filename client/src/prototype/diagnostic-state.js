@@ -7,6 +7,7 @@ import {
   createInitialIceDiagnosticsState,
   validateIceCredentialsPayload,
 } from './ice-diagnostics.js';
+import { createInitialWebRtcState } from './webrtc-harness.js';
 
 const VALID_CONNECTION_STATUSES = new Set([
   'disconnected',
@@ -202,11 +203,22 @@ function normalizeIceDiagnostics(value) {
   return createInitialIceDiagnosticsState(value);
 }
 
+function normalizeWebRtcState(value) {
+  if (value === null) {
+    return null;
+  }
+  if (!isObjectRecord(value)) {
+    return createInitialWebRtcState();
+  }
+  return createInitialWebRtcState(value);
+}
+
 const OPTIONAL_LIFECYCLE_NORMALIZERS = {
   entryRole: normalizeEntryRole,
   selfPeerId: normalizePeerId,
   remotePeerId: normalizePeerId,
   iceDiagnostics: normalizeIceDiagnostics,
+  webrtc: normalizeWebRtcState,
 };
 
 function copyOptionalLifecycleFields(target, source, requireDefined) {
@@ -435,6 +447,7 @@ export function resetRoomMembership(state) {
     baseState,
     'iceDiagnostics',
   );
+  const hasWebrtc = Object.prototype.hasOwnProperty.call(baseState, 'webrtc');
 
   return {
     ...baseState,
@@ -450,6 +463,12 @@ export function resetRoomMembership(state) {
             baseState.iceDiagnostics === null
               ? null
               : createInitialIceDiagnosticsState(),
+        }
+      : {}),
+    ...(hasWebrtc
+      ? {
+          webrtc:
+            baseState.webrtc === null ? null : createInitialWebRtcState(),
         }
       : {}),
   };
@@ -478,6 +497,7 @@ export function applyRoomCreated(state, payload) {
     baseState,
     'iceDiagnostics',
   );
+  const hasWebrtc = Object.prototype.hasOwnProperty.call(baseState, 'webrtc');
 
   return {
     ...baseState,
@@ -495,6 +515,12 @@ export function applyRoomCreated(state, payload) {
             baseState.iceDiagnostics === null
               ? null
               : createInitialIceDiagnosticsState(),
+        }
+      : {}),
+    ...(hasWebrtc
+      ? {
+          webrtc:
+            baseState.webrtc === null ? null : createInitialWebRtcState(),
         }
       : {}),
   };
@@ -523,6 +549,7 @@ export function applyRoomJoined(state, payload) {
     baseState,
     'iceDiagnostics',
   );
+  const hasWebrtc = Object.prototype.hasOwnProperty.call(baseState, 'webrtc');
 
   return {
     ...baseState,
@@ -540,6 +567,12 @@ export function applyRoomJoined(state, payload) {
             baseState.iceDiagnostics === null
               ? null
               : createInitialIceDiagnosticsState(),
+        }
+      : {}),
+    ...(hasWebrtc
+      ? {
+          webrtc:
+            baseState.webrtc === null ? null : createInitialWebRtcState(),
         }
       : {}),
   };
@@ -591,12 +624,38 @@ export function applyPeerLeft(state, payload) {
     return { ...baseState };
   }
 
+  const hasWebrtc = Object.prototype.hasOwnProperty.call(baseState, 'webrtc');
+
   // Regardless of initial entryRole, the remaining peer becomes offerer for the next peer.
   return {
     ...baseState,
     peerState: 'waiting_for_peer',
     negotiationDuty: 'offerer',
     remotePeerId: null,
+    ...(hasWebrtc
+      ? {
+          webrtc:
+            baseState.webrtc === null
+              ? null
+              : createInitialWebRtcState({
+                  ...baseState.webrtc,
+                  status: 'closed',
+                  remoteGeneration: null,
+                  activePeerId: null,
+                  signalingState: 'closed',
+                  iceConnectionState: 'closed',
+                  connectionState: 'closed',
+                  dataChannelState:
+                    baseState.webrtc.dataChannelState === 'none'
+                      ? 'none'
+                      : 'closed',
+                  stalledGathering: false,
+                  stalledDiagnostic: null,
+                  localDescriptionForwarded: false,
+                  queuedCandidateCount: 0,
+                }),
+        }
+      : {}),
   };
 }
 
@@ -785,6 +844,22 @@ export function applyRoomError(state, payload) {
 }
 
 /**
+ * Updates the WebRTC signaling harness state snapshot with sanitized fields.
+ * @param {ReturnType<typeof createInitialPrototypeState>} state
+ * @param {unknown} webrtcState
+ */
+export function applyWebRtcState(state, webrtcState) {
+  const baseState = state
+    ? ensureStateShape(state)
+    : createInitialPrototypeState();
+
+  return {
+    ...baseState,
+    webrtc: normalizeWebRtcState(webrtcState),
+  };
+}
+
+/**
  * Clears only lastError while preserving connection status, room membership, and eventLog.
  * @param {ReturnType<typeof createInitialPrototypeState>} state
  */
@@ -795,6 +870,8 @@ export function clearLastError(state) {
   const hasIceDiagnosticsError =
     Boolean(baseState.iceDiagnostics) &&
     baseState.iceDiagnostics.lastError !== null;
+  const hasWebRtcError =
+    Boolean(baseState.webrtc) && baseState.webrtc.lastError !== null;
 
   return {
     ...baseState,
@@ -803,6 +880,14 @@ export function clearLastError(state) {
       ? {
           iceDiagnostics: {
             ...baseState.iceDiagnostics,
+            lastError: null,
+          },
+        }
+      : {}),
+    ...(hasWebRtcError
+      ? {
+          webrtc: {
+            ...baseState.webrtc,
             lastError: null,
           },
         }
