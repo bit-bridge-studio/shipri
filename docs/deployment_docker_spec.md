@@ -324,6 +324,9 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://poc.shipri.app,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
       - STUN_URLS=${STUN_URLS:-stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302}
+      # Full-backend runtime variables (Section 6) inject REQUIRE_ROOM_AUTH, TRUST_PROXY,
+      # MAX_ROOMS, TTL/rate limits, TURN_URLS, TURN_SHARED_SECRET, TURN_CREDENTIAL_TTL_SECONDS,
+      # and REQUIRE_TURN via uncommitted deployment environment configuration without committed secrets.
     expose:
       - "5001"
 
@@ -409,9 +412,68 @@ Caddy handles TLS termination automatically for the web app, `/health`, and Sock
 
 ## 6. Deployment Environment Configuration
 
-Before running `docker compose up -d` on the server:
-1. Point your domain (e.g., `shipri.app`) to your VPS IP address (A-record).
-2. Set `TURN_SHARED_SECRET` through a deployment environment file or secret manager. Do not commit real secret values.
-3. Ensure ports `80`, `443`, and `3478` (UDP/TCP) are open in your VPS firewall for the web endpoint and standard TURN endpoint.
-4. If using TURNS on `turn.shipri.app:443`, allocate a non-conflicting endpoint as described in `nat_traversal_strategy.md`.
-5. Configure the `coturn/turnserver.conf` file with the correct external IP and TLS certificate paths (as defined in `nat_traversal_strategy.md`).
+Full backend production deployments (`BE-1` through `BE-7`) configure behavior strictly through runtime environment variables (`server/.env`, host secret injection, or container orchestration env vars) with zero committed secrets or hardcoded TURN credentials:
+
+```typescript
+interface FullBackendDeploymentEnv {
+  // HTTP/Socket.IO listen port inside shipri-server container (default 5001).
+  PORT: number;
+
+  // Deployment environment ('production' forbids REQUIRE_ROOM_AUTH=false and unsafe overrides).
+  NODE_ENV: 'development' | 'production' | 'test';
+
+  // Strict comma-separated HTTP(S) allowlist for Express and Socket.IO CORS (no wildcards).
+  ALLOWED_ORIGINS: string;
+
+  // Proxy trust setting for IP rate limiting (false direct, 1 or subnet behind nginx-proxy/Caddy).
+  TRUST_PROXY: boolean | number | string;
+
+  // Requires roomAuthVerifier/roomAuthToken checks (true in production; false only in POC/non-prod).
+  REQUIRE_ROOM_AUTH: boolean;
+
+  // Maximum active concurrent rooms in memory before returning SERVER_BUSY (default 5000).
+  MAX_ROOMS: number;
+
+  // Idle/waiting room TTL in milliseconds (default 1800000 = 30m).
+  ROOM_IDLE_TTL_MS: number;
+
+  // Absolute room maximum lifetime in milliseconds (default 14400000 = 4h).
+  ROOM_MAX_LIFETIME_MS: number;
+
+  // Periodic room expiration sweep interval in milliseconds (default 60000 = 60s).
+  ROOM_CLEANUP_INTERVAL_MS: number;
+
+  // Per-IP room:create limit and window in milliseconds before RATE_LIMITED (default 10 per 60000ms).
+  ROOM_CREATE_RATE_LIMIT_MAX: number;
+  ROOM_CREATE_RATE_LIMIT_WINDOW_MS: number;
+
+  // Comma-separated STUN and TURN/TURNS URLs consumed by ice:get.
+  STUN_URLS: string;
+  TURN_URLS: string;
+
+  // Long-term Coturn HMAC-SHA1 static-auth-secret. Required when REQUIRE_TURN=true; never logged or exposed.
+  TURN_SHARED_SECRET: string;
+
+  // Ephemeral TURN credential TTL in seconds (default 7200 = 2h).
+  TURN_CREDENTIAL_TTL_SECONDS: number;
+
+  // Fails ice:get closed with SERVER_BUSY when TURN config is invalid/missing (true in production).
+  REQUIRE_TURN: boolean;
+
+  // Public Caddy site address (e.g., shipri.app for production vs poc.shipri.app for POC staging).
+  CADDY_SITE_ADDRESS: string;
+
+  // Build-time signaling origin baked into static Vite client assets (no secrets).
+  VITE_SIGNALING_URL: string;
+}
+```
+
+### 6.1. Pre-Startup Production Checklist and Privacy Boundaries
+
+Before running `docker compose up -d` (or `docker compose --profile turn up -d`) on the production server:
+1. Point your domain (e.g., `shipri.app`) to your VPS IP address (`A`/`AAAA` record), and point `turn.shipri.app` to its dedicated non-conflicting endpoint if using TURNS on port `443`.
+2. Inject `TURN_SHARED_SECRET` through an uncommitted host `.env` file or secret manager matching Coturn `static-auth-secret`. Never commit `.env` files, placeholder secrets, or private keys.
+3. Configure `TRUST_PROXY` (`1` or explicit proxy subnet when behind Caddy or external `nginx-proxy`, `false` otherwise) and restrict `ALLOWED_ORIGINS` strictly to production `https://shipri.app` origins (no wildcards `*`).
+4. Ensure firewall rules open `80/tcp` and `443/tcp` for Caddy/`nginx-proxy`, `3478` (UDP/TCP) and configured Coturn relay ports (plus `443/tcp` on `turn.shipri.app` if enabled), while keeping internal `5001/tcp` (`shipri-server`) unexposed externally.
+5. Configure `coturn/turnserver.conf` with the external IP, realm (`turn.shipri.app`), TLS certificate paths, and bandwidth quotas defined in `nat_traversal_strategy.md` Section `4`.
+6. Confirm `GET /health` exposes only `{ status, roomsCount }` (`Cache-Control: no-store`), and ensure proxy/container logs never record `authToken`, `authVerifier`, `TURN_SHARED_SECRET`, TURN credentials, `#key=` URL fragments, client IPs in app logs, unnecessary `socket.id` values, or WebRTC `signalData`.
