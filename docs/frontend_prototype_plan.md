@@ -320,20 +320,23 @@ Prototype error-handling rules:
 
 ## 6. Prototype Expansion During Full Backend Development
 
+All modules and controls under `client/src/prototype/` (`webrtc-harness.js`, `diagnostic-channel.js`, `diagnostic-state.js`, prototype `App.jsx` panels, and the `FP-5`/`FP-6` diagnostic controls below) are strictly **prototype-only**. They validate the frozen signaling, authorization, abuse-control, and NAT-traversal contracts during Part 3 without implementing Part 4 E2EE file boards, encrypted file transfers, or browser file persistence.
+
 ### FP-5: Add NAT and TURN Diagnostics
 
 **Dependency:** full backend stages `BE-4` and `BE-6`.
 
 **Work:**
 
-* Add selectable `iceTransportPolicy` modes: `all` and `relay`.
-* Display gathered candidate types and the selected connection candidate pair where supported.
-* Show whether the final connection is direct or relayed.
-* Surface credential and connectivity errors clearly.
+* Add selectable `iceTransportPolicy` modes in the prototype UI: `"all"` (direct LAN/STUN preferred with TURN fallback) and `"relay"` (forced-TURN verification against `coturn`).
+* Validate full backend `ice:credentials` payloads containing both STUN URLs and ephemeral TURN entries (`username`, `credential`), while keeping TURN `username` and `credential` and `TURN_SHARED_SECRET` redacted from event logs and UI diagnostics.
+* Display gathered candidate-type counts (`host`, `srflx`, `relay`) and inspect the active `RTCPeerConnection` selected candidate pair (`getStats()`) where supported by the browser.
+* Clearly show whether the active connection is `direct` or `relayed` (rendering the bandwidth notice from `nat_traversal_strategy.md` Section `5` when relayed).
+* Surface `SERVER_BUSY` (fail-closed missing/invalid TURN configuration), expired credential failures, and `iceconnectionstate` / `connectionstate` connectivity errors clearly.
 
 **Exit criteria:**
 
-* The prototype validates both direct and forced-TURN connections.
+* The prototype validates both direct (`iceTransportPolicy: "all"`) and forced-TURN (`iceTransportPolicy: "relay"`) bidirectional `"shipri-diagnostic"` exchanges without exposing `TURN_SHARED_SECRET`.
 
 ### FP-6: Prototype Acceptance Gate
 
@@ -341,14 +344,31 @@ Prototype error-handling rules:
 
 **Work:**
 
-* Verify all documented Socket.IO events and error codes manually.
-* Verify room teardown, reconnect, and unauthorized-action behavior.
-* Document how to use the prototype during backend development.
-* Mark prototype-only modules and controls clearly.
+* Add prototype room-authorization helpers implementing client-side CSPRNG 256-bit secret generation and Web Crypto `HKDF-SHA256` (`salt: "shipri-room-auth-salt-v1"`, `info: "shipri-room-auth-v1"`) + `SHA-256` verifier derivation (`authVerifier` on `room:create`, `authToken` on `room:join`), keeping secrets strictly in memory/URL fragment diagnostic helpers and never in URL query/path or server logs.
+* Expose manual override controls for malformed payloads, wrong/missing `authToken`, custom `roomId` targeting, and transport-policy selection so every backend acceptance scenario can be exercised deterministically.
+* Document clear usage instructions and mark prototype-only modules/controls before Part 4 (`frontend_development_plan.md`) begins.
+
+**Full Backend Acceptance Scenario Matrix (`BE-1` through `BE-6`):**
+
+| Backend Stage | Acceptance Scenario | Prototype Action / Trigger | Expected Observable Result |
+| :--- | :--- | :--- | :--- |
+| `BE-1`, `BE-3` | Health and strict CORS origin allowlist | Connect from allowed origin and check `GET /health`; probe disallowed origin in integration/curl check. | `GET /health` returns minimal `{ status: "ok", roomsCount }` (`no-store`); unapproved origin is rejected without wildcard `*`. |
+| `BE-2` | Authorized room creation (`room:create`) | Create room with `REQUIRE_ROOM_AUTH=true` sending `{ authVerifier }` derived from HKDF `shipri-room-auth-v1`. | Receives `room:created` with canonical `ship-[a-f0-9]{4}`, `negotiationDuty: "offerer"`, and copyable diagnostic join token without sending `#key=` or raw secret in URL query/path. |
+| `BE-2` | Authorized second-peer join (`room:join`) | Join with matching `{ roomId, authToken }` in second browser tab or device. | Joiner receives `room:joined` (`answerer`); creator receives `peer:joined`; `ice:get` and SDP/trickle ICE succeed. |
+| `BE-2` | Missing or invalid `authToken` rejection | Attempt `room:join` without `authToken` or with tampered `authToken` against an active room. | Returns `room:error` with `INVALID_PAYLOAD` (when omitted/empty under `REQUIRE_ROOM_AUTH=true`) or `UNAUTHORIZED` (when token mismatches verifier, checked before `ROOM_FULL`). Active room stays untouched. |
+| `BE-2` | Third-peer capacity limit (`ROOM_FULL`) | Third client emits `room:join` with valid `{ roomId, authToken }` on a 2-peer `Connected` room. | Third client receives `ROOM_FULL`; connected peers remain undisturbed. |
+| `BE-2` | Non-member signaling and ICE isolation | Non-member socket emits `signal:forward`, `ice:get`, or `room:leave` targeting an active `roomId`. | Emitting socket receives `UNAUTHORIZED`; target room peers receive no spoofed `signal:receive` or state mutation. |
+| `BE-2` | Malformed input and peer-unavailable guards | Trigger preset invalid shapes, unknown fields, non-canonical `roomId`, or `signal:forward` in `WaitingForPeer`. | Receives stable `INVALID_PAYLOAD`, `INVALID_ROOM_ID`, or `PEER_UNAVAILABLE`; active room state stays intact. |
+| `BE-2` | Equal-peer leave, disconnect, and replacement join | Either peer clicks Leave Room or closes tab (`disconnect`), then a replacement authorized peer joins. | Remaining peer receives `peer:left` (`"leave"` or `"disconnect"`), closes old `RTCPeerConnection`, becomes `offerer`, and negotiates fresh generation with replacement `answerer`; empty room deletes cleanly. |
+| `BE-2` | Idle TTL and hard room lifetime expiry | Allow a waiting/idle room to pass `ROOM_IDLE_TTL_MS` or hard `ROOM_MAX_LIFETIME_MS`. | Expired room is purged from memory; connected members receive `ROOM_NOT_FOUND` and subsequent joins/signals fail with `ROOM_NOT_FOUND`. |
+| `BE-3` | `room:create` rate limiting and `MAX_ROOMS` capacity | Exceed `ROOM_CREATE_RATE_LIMIT_MAX` within `ROOM_CREATE_RATE_LIMIT_WINDOW_MS`, or reach `MAX_ROOMS`. | Rate-limited requests receive `RATE_LIMITED`; capacity saturation receives `SERVER_BUSY`. |
+| `BE-3` | Privacy-safe operational logs | Complete full create, join, relay, ICE, error, and leave cycle while inspecting client Event Log and server stdout. | Zero `#key=`, `authToken`, `authVerifier`, `TURN_SHARED_SECRET`, TURN credentials, raw SDP, ICE candidates, client IPs, unnecessary `socket.id`s, or user file metadata in logs. |
+| `BE-4`, `BE-6` | Direct P2P (`all`) and forced-TURN (`relay`) verification | Run bidirectional `"shipri-diagnostic"` ping/pong/text under `iceTransportPolicy: "all"` and `"relay"`; test missing/expired TURN config (`REQUIRE_TURN=true`). | Valid STUN+TURN succeeds in both modes, displays candidate types (`host`/`srflx`/`relay`) and direct/relay status with relay notice; missing/invalid TURN fails closed with `SERVER_BUSY`. |
 
 **Exit criteria:**
 
-* The prototype can exercise every backend acceptance scenario required by `backend_development_plan.md`.
+* The prototype can exercise every backend acceptance scenario required by `backend_development_plan.md` (`BE-1` through `BE-6`).
+* All prototype-only modules under `client/src/prototype/` and diagnostic UI controls are clearly marked before `BE-7` closes.
 * Full backend stage `BE-7` may begin.
 
 ---
