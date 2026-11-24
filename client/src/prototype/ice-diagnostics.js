@@ -305,6 +305,7 @@ export function validateIceCredentialsPayload(payload, options = {}) {
   }
 
   const safeOptions = isPlainObject(options) ? options : {};
+  const allowTurn = safeOptions.allowTurn === true;
   const expectedRoomId =
     typeof safeOptions.expectedRoomId === 'string' &&
     safeOptions.expectedRoomId.trim() !== ''
@@ -351,12 +352,17 @@ export function validateIceCredentialsPayload(payload, options = {}) {
       );
     }
 
+    const allowedEntryKeys = allowTurn
+      ? new Set(['urls', 'username', 'credential'])
+      : new Set(['urls']);
     const hasUnexpectedEntryKey = Object.keys(entry).some(
-      (key) => key !== 'urls',
+      (key) => !allowedEntryKeys.has(key),
     );
     if (hasUnexpectedEntryKey) {
       return buildInvalidIceError(
-        'Unexpected auth or unsupported fields in development STUN-only ICE server entry.',
+        allowTurn
+          ? 'Unexpected unsupported fields in ICE server entry.'
+          : 'Unexpected auth or unsupported fields in development STUN-only ICE server entry.',
         roomId,
       );
     }
@@ -378,12 +384,16 @@ export function validateIceCredentialsPayload(payload, options = {}) {
       );
     }
 
+    let entryHasTurn = false;
+    let entryHasStun = false;
     for (const rawUrl of urlList) {
       const parsed = parseIceEndpointUrl(rawUrl);
       if (!parsed.ok) {
         if (parsed.reason === 'scheme') {
           return buildInvalidIceError(
-            'Invalid ICE server URL scheme; expected stun: or stuns:.',
+            allowTurn
+              ? 'Invalid ICE server URL scheme; expected stun:, stuns:, turn:, or turns:.'
+              : 'Invalid ICE server URL scheme; expected stun: or stuns:.',
             roomId,
           );
         }
@@ -400,11 +410,50 @@ export function validateIceCredentialsPayload(payload, options = {}) {
       }
 
       if (parsed.isTurn) {
+        if (!allowTurn) {
+          return buildInvalidIceError(
+            'TURN servers are not supported in POC development STUN-only ICE mode.',
+            roomId,
+          );
+        }
+        entryHasTurn = true;
+      } else {
+        entryHasStun = true;
+      }
+    }
+
+    if (entryHasTurn) {
+      if (entryHasStun) {
         return buildInvalidIceError(
-          'TURN servers are not supported in POC development STUN-only ICE mode.',
+          'ICE server entry must not mix STUN and TURN URLs.',
           roomId,
         );
       }
+      if (
+        typeof entry.username !== 'string' ||
+        entry.username.trim() === '' ||
+        typeof entry.credential !== 'string' ||
+        entry.credential.trim() === ''
+      ) {
+        return buildInvalidIceError(
+          'TURN ICE server entries must include non-empty username and credential strings.',
+          roomId,
+        );
+      }
+
+      normalizedIceServers.push({
+        urls: isArrayUrls ? [...entry.urls] : entry.urls,
+        username: entry.username,
+        credential: entry.credential,
+      });
+      continue;
+    }
+
+    if (entry.username !== undefined || entry.credential !== undefined) {
+      return buildInvalidIceError(
+        'STUN-only ICE server entries must not include TURN credentials.',
+        roomId,
+      );
     }
 
     normalizedIceServers.push({
@@ -413,7 +462,7 @@ export function validateIceCredentialsPayload(payload, options = {}) {
   }
 
   const summary = summarizeIceServers(normalizedIceServers);
-  if (!summary.isStunOnly || summary.endpointCount === 0) {
+  if ((!allowTurn && !summary.isStunOnly) || summary.endpointCount === 0) {
     return buildInvalidIceError(
       'ICE configuration payload must include valid development STUN endpoints.',
       roomId,
