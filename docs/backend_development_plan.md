@@ -78,6 +78,8 @@ Full backend development begins only after:
 
 ### BE-2: Secure Room Lifecycle
 
+**Status:** Completed (`2026-11-24`) - implemented `shipri-room-auth-v1` HKDF-separated verifier/token authorization (`server/src/room-auth.js`), strict payload and 64 KiB `signalData` validation, constant-time `authToken` verification before `ROOM_FULL`, idle TTL / hard lifetime / periodic GC cleanup, and prototype room-auth diagnostic helpers (`client/src/prototype/room-auth.js`).
+
 **Work:**
 
 * Replace `Math.random()` with Node.js CSPRNG.

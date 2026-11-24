@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "check": "node --check src/index.js && node --check src/server.js && node --check src/config.js && node --check src/room-id.js && node --check src/room-store.js && node --check src/smoke-check.js",
+    "check": "node --check src/index.js && node --check src/server.js && node --check src/config.js && node --check src/room-auth.js && node --check src/room-id.js && node --check src/room-store.js && node --check src/smoke-check.js",
     "smoke:staging": "node src/smoke-check.js",
     "test": "vitest run"
   },

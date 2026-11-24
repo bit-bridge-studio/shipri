@@ -3,7 +3,9 @@ import cors from 'cors';
 import express from 'express';
 import { Server } from 'socket.io';
 import { resolveDevelopmentIceServers, resolveServerConfig } from './config.js';
+import { verifyAuthToken } from './room-auth.js';
 import {
+  SIGNAL_DATA_MAX_BYTES,
   allocateUniqueRoomId,
   createRoomError,
   generatePeerId,
@@ -36,7 +38,8 @@ function removePeerFromRoom(io, roomStore, room, peerIndex, socket, reason) {
 
 export function createSignalingServer(options = {}) {
   const config = resolveServerConfig(options);
-  const now = typeof options?.now === 'function' ? options.now : () => Date.now();
+  const now =
+    typeof options?.now === 'function' ? options.now : () => Date.now();
 
   const app = express();
   app.set('trust proxy', config.trustProxy);
@@ -50,16 +53,83 @@ export function createSignalingServer(options = {}) {
 
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
+    maxHttpBufferSize: SIGNAL_DATA_MAX_BYTES,
     cors: {
       origin: config.allowedOrigins,
       methods: ['GET', 'POST'],
     },
   });
 
-  const roomStore = createRoomStore({ now });
+  const roomStore = createRoomStore({
+    now,
+    roomIdleTtlMs: config.roomIdleTtlMs,
+    roomMaxLifetimeMs: config.roomMaxLifetimeMs,
+  });
   const { activeRooms, socketRooms } = roomStore;
 
+  function notifyExpiredRoom(expiredRoom) {
+    if (!expiredRoom) {
+      return;
+    }
+
+    const expiryError = createRoomError(
+      'ROOM_NOT_FOUND',
+      'Room does not exist or has expired.',
+      expiredRoom.roomId,
+    );
+
+    for (const peer of expiredRoom.peers) {
+      const peerSocket = io.sockets.sockets.get(peer.socketId);
+      if (peerSocket) {
+        peerSocket.leave(expiredRoom.roomId);
+        peerSocket.emit('room:error', expiryError);
+      }
+    }
+
+    console.log(`Room expired: ${expiredRoom.roomId}`);
+  }
+
+  function sweepExpiredRooms() {
+    const expiredRooms = roomStore.purgeExpiredRooms();
+    for (const expiredRoom of expiredRooms) {
+      notifyExpiredRoom(expiredRoom);
+    }
+    return expiredRooms.length;
+  }
+
+  function resolveActiveRoom(roomId) {
+    const { room, expiredRoom } = roomStore.getActiveRoom(roomId);
+    if (expiredRoom) {
+      notifyExpiredRoom(expiredRoom);
+    }
+    return room;
+  }
+
+  function hasLiveSocketMembership(socketId) {
+    const membership = roomStore.findSocketMembership(socketId);
+    if (!membership) {
+      return false;
+    }
+
+    if (roomStore.isRoomExpired(membership.room)) {
+      const expiredRoom = roomStore.expireRoom(membership.room.roomId);
+      notifyExpiredRoom(expiredRoom);
+      return false;
+    }
+
+    return true;
+  }
+
+  const cleanupTimer = setInterval(
+    sweepExpiredRooms,
+    config.roomCleanupIntervalMs,
+  );
+  if (typeof cleanupTimer.unref === 'function') {
+    cleanupTimer.unref();
+  }
+
   app.get('/health', (_req, res) => {
+    sweepExpiredRooms();
     res.set('Cache-Control', 'no-store');
     res.status(200).json({
       status: 'ok',
@@ -72,13 +142,15 @@ export function createSignalingServer(options = {}) {
 
     // 1. First peer creates room
     socket.on('room:create', (payload) => {
-      const validation = validateRoomCreatePayload(payload);
+      const validation = validateRoomCreatePayload(payload, {
+        requireRoomAuth: config.requireRoomAuth,
+      });
       if (!validation.ok) {
         socket.emit('room:error', validation.error);
         return;
       }
 
-      if (roomStore.hasActiveRoomMembership(socket.id)) {
+      if (hasLiveSocketMembership(socket.id)) {
         socket.emit(
           'room:error',
           createRoomError(
@@ -96,6 +168,7 @@ export function createSignalingServer(options = {}) {
         roomId,
         peerId,
         socketId: socket.id,
+        authVerifierHash: validation.authVerifierHash ?? null,
       });
       socket.join(roomId);
 
@@ -109,14 +182,16 @@ export function createSignalingServer(options = {}) {
 
     // 2. Second peer joins room
     socket.on('room:join', (payload) => {
-      const validation = validateRoomJoinPayload(payload);
+      const validation = validateRoomJoinPayload(payload, {
+        requireRoomAuth: config.requireRoomAuth,
+      });
       if (!validation.ok) {
         socket.emit('room:error', validation.error);
         return;
       }
 
-      const { roomId } = validation;
-      const room = roomStore.getRoom(roomId);
+      const { roomId, authToken } = validation;
+      const room = resolveActiveRoom(roomId);
 
       if (!room) {
         socket.emit(
@@ -130,12 +205,27 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      if (roomStore.hasActiveRoomMembership(socket.id)) {
+      if (hasLiveSocketMembership(socket.id)) {
         socket.emit(
           'room:error',
           createRoomError(
             'UNAUTHORIZED',
             'Socket already belongs to an active room.',
+            roomId,
+          ),
+        );
+        return;
+      }
+
+      if (
+        room.authVerifierHash !== null &&
+        !verifyAuthToken(authToken, room.authVerifierHash)
+      ) {
+        socket.emit(
+          'room:error',
+          createRoomError(
+            'UNAUTHORIZED',
+            'Invalid room authorization token.',
             roomId,
           ),
         );
@@ -185,7 +275,7 @@ export function createSignalingServer(options = {}) {
       }
 
       const { roomId } = validation;
-      const room = roomStore.getRoom(roomId);
+      const room = resolveActiveRoom(roomId);
       if (!room) {
         socket.emit(
           'room:error',
@@ -227,7 +317,7 @@ export function createSignalingServer(options = {}) {
       }
 
       const { roomId, signalData } = validation;
-      const room = roomStore.getRoom(roomId);
+      const room = resolveActiveRoom(roomId);
       if (!room) {
         socket.emit(
           'room:error',
@@ -269,6 +359,7 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
+      roomStore.touchRoom(room);
       io.to(targetPeer.socketId).emit('signal:receive', {
         roomId,
         peerId: senderPeer.peerId,
@@ -285,7 +376,7 @@ export function createSignalingServer(options = {}) {
       }
 
       const { roomId } = validation;
-      const room = roomStore.getRoom(roomId);
+      const room = resolveActiveRoom(roomId);
       if (!room) {
         socket.emit(
           'room:error',
@@ -327,6 +418,7 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
+      roomStore.touchRoom(room);
       socket.emit('ice:credentials', {
         roomId,
         iceServers: iceConfig.iceServers,
@@ -342,6 +434,12 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
+      if (roomStore.isRoomExpired(membership.room)) {
+        const expiredRoom = roomStore.expireRoom(membership.room.roomId);
+        notifyExpiredRoom(expiredRoom);
+        return;
+      }
+
       removePeerFromRoom(
         io,
         roomStore,
@@ -354,6 +452,8 @@ export function createSignalingServer(options = {}) {
   });
 
   function close() {
+    clearInterval(cleanupTimer);
+
     return new Promise((resolve, reject) => {
       if (!httpServer.listening) {
         io.disconnectSockets(true);
@@ -381,6 +481,7 @@ export function createSignalingServer(options = {}) {
     roomStore,
     activeRooms,
     socketRooms,
+    sweepExpiredRooms,
     close,
   };
 }

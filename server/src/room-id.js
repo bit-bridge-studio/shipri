@@ -1,8 +1,13 @@
 import { randomBytes } from 'node:crypto';
+import {
+  decodeAuthVerifier,
+  isValidAuthToken,
+} from './room-auth.js';
 
 export const ROOM_ID_PATTERN = /^ship-[a-f0-9]{4}$/;
 export const PEER_ID_PATTERN = /^peer-[a-f0-9]{16}$/;
 export const MAX_ROOM_ID_ATTEMPTS = 65_536;
+export const SIGNAL_DATA_MAX_BYTES = 65_536;
 
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -81,14 +86,41 @@ function validatePayloadEnvelope(payload, allowedKeys, invalidMessage) {
 }
 
 /**
- * Validates the `room:create` payload envelope.
+ * Validates the `room:create` payload envelope and optional/required `authVerifier`.
  */
-export function validateRoomCreatePayload(payload) {
-  if (!isPlainObject(payload) || Object.keys(payload).length > 0) {
+export function validateRoomCreatePayload(
+  payload,
+  { requireRoomAuth = false } = {},
+) {
+  if (!isPlainObject(payload)) {
     return {
       ok: false,
       error: createRoomError('INVALID_PAYLOAD', 'Invalid room:create payload.'),
     };
+  }
+
+  const keys = Object.keys(payload);
+  const hasUnsupportedField = keys.some((key) => key !== 'authVerifier');
+  if (hasUnsupportedField) {
+    return {
+      ok: false,
+      error: createRoomError('INVALID_PAYLOAD', 'Invalid room:create payload.'),
+    };
+  }
+
+  if (requireRoomAuth || payload.authVerifier !== undefined) {
+    const authVerifierHash = decodeAuthVerifier(payload.authVerifier);
+    if (!authVerifierHash) {
+      return {
+        ok: false,
+        error: createRoomError(
+          'INVALID_PAYLOAD',
+          'Invalid room:create payload.',
+        ),
+      };
+    }
+
+    return { ok: true, authVerifierHash };
   }
 
   return { ok: true };
@@ -117,8 +149,44 @@ function validateRoomIdEnvelope(payload, invalidMessage) {
 /**
  * Validates the `room:join` payload according to protocol error precedence.
  */
-export function validateRoomJoinPayload(payload) {
-  return validateRoomIdEnvelope(payload, 'Invalid room:join payload.');
+export function validateRoomJoinPayload(
+  payload,
+  { requireRoomAuth = false } = {},
+) {
+  const envelope = validatePayloadEnvelope(
+    payload,
+    ['roomId', 'authToken'],
+    'Invalid room:join payload.',
+  );
+  if (!envelope.ok) {
+    return envelope;
+  }
+
+  if (requireRoomAuth || payload.authToken !== undefined) {
+    if (!isValidAuthToken(payload.authToken)) {
+      return {
+        ok: false,
+        error: createRoomError(
+          'INVALID_PAYLOAD',
+          'Invalid room:join payload.',
+          payload.roomId,
+        ),
+      };
+    }
+  }
+
+  if (!isValidRoomId(payload.roomId)) {
+    return {
+      ok: false,
+      error: createRoomError('INVALID_ROOM_ID', 'Invalid room ID format.'),
+    };
+  }
+
+  return {
+    ok: true,
+    roomId: payload.roomId,
+    authToken: payload.authToken ?? null,
+  };
 }
 
 /**

@@ -1142,16 +1142,37 @@ export function createRoomLifecycleActions(signalingClient, setState) {
     );
   }
 
-  function createRoom() {
+  function createRoom(options) {
+    if (
+      options &&
+      typeof options === 'object' &&
+      typeof options.authVerifier === 'string' &&
+      options.authVerifier.trim() !== ''
+    ) {
+      signalingClient.createRoom({ authVerifier: options.authVerifier.trim() });
+      return true;
+    }
+
     signalingClient.createRoom();
     return true;
   }
 
-  function joinRoom(rawRoomId) {
+  function joinRoom(rawRoomId, options) {
     const roomId = typeof rawRoomId === 'string' ? rawRoomId.trim() : '';
     if (!roomId) {
       return false;
     }
+
+    if (
+      options &&
+      typeof options === 'object' &&
+      typeof options.authToken === 'string' &&
+      options.authToken.length > 0
+    ) {
+      signalingClient.joinRoom({ roomId, authToken: options.authToken });
+      return true;
+    }
+
     signalingClient.joinRoom(roomId);
     return true;
   }
