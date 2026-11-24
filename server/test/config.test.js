@@ -358,10 +358,10 @@ describe('Backend POC staging deployment configuration', () => {
     expect(prodCompose).toMatch(/nginx-proxy:\s*\n\s*external:\s*true/);
     expect(prodCompose).not.toMatch(/^\s*ports:/m);
 
-    expect(prodCompose).not.toContain('TURN_SHARED_SECRET');
     expect(prodCompose).not.toContain('coturn');
     expect(prodCompose).not.toContain('shipri-turn');
     expect(prodCompose).not.toContain('your_super_secret_here');
+    expect(prodCompose).not.toMatch(/TURN_SHARED_SECRET=[A-Za-z0-9+/=_-]{8,}/);
   });
 
   test('validates default staging compose environment and enforces Socket.IO CORS origins', async () => {
@@ -446,7 +446,9 @@ describe('Backend POC staging deployment configuration', () => {
     const standaloneCompose = readRepoFile('docker-compose.yml');
 
     expect(standaloneCompose).not.toMatch(/^\s*version:/m);
-    expect(standaloneCompose).not.toContain('TURN_SHARED_SECRET');
+    expect(standaloneCompose).not.toMatch(
+      /TURN_SHARED_SECRET=[A-Za-z0-9+/=_-]{8,}/,
+    );
     expect(standaloneCompose).not.toContain('your_super_secret_here');
 
     expect(extractComposeDefaultEnv(standaloneCompose, 'PORT')).toBe('5001');

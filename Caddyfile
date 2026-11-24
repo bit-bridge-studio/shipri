@@ -1,9 +1,9 @@
-# Caddy Configuration for Shipri Backend POC Staging
+# Caddy Reverse Proxy Configuration for Shipri (Staging and Production)
 
 {$CADDY_SITE_ADDRESS:poc.shipri.app} {
     header {
-        X-Shipri-Environment "poc-staging"
-        X-Robots-Tag "noindex, nofollow"
+        X-Shipri-Environment "{$SHIPRI_ENV_HEADER:poc-staging}"
+        X-Robots-Tag "{$SHIPRI_ROBOTS_HEADER:noindex, nofollow}"
     }
 
     # 1. Route Socket.IO HTTP polling and WSS WebSocket traffic
