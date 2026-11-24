@@ -23,6 +23,7 @@ import {
   runValidationScenario,
 } from './prototype/room-errors.js';
 import {
+  RELAY_BANDWIDTH_WARNING,
   createInitialWebRtcState,
   createWebRtcHarness,
 } from './prototype/webrtc-harness.js';
@@ -610,20 +611,46 @@ function App({ signalingClient, initialState } = {}) {
             </p>
           </div>
 
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={handleStartWebRtcNegotiation}
-            disabled={
-              !socketConnected ||
-              !roomId ||
-              peerState !== 'connected' ||
-              negotiationDuty !== 'offerer' ||
-              webrtc.status === 'negotiating'
-            }
-          >
-            Start WebRTC Negotiation
-          </button>
+          <div className="webrtc-harness-controls">
+            <label className="policy-select-label" htmlFor="ice-transport-policy">
+              ICE Transport Policy
+            </label>
+            <select
+              id="ice-transport-policy"
+              name="iceTransportPolicy"
+              className="room-id-input"
+              aria-label="ICE Transport Policy"
+              value={webrtc.iceTransportPolicy ?? 'all'}
+              onChange={(event) => {
+                const nextPolicy = event.target.value === 'relay' ? 'relay' : 'all';
+                webrtcHarnessRef.current?.setIceTransportPolicy(nextPolicy);
+                setPrototypeState((prev) =>
+                  applyWebRtcState(prev, {
+                    ...(prev.webrtc ?? createInitialWebRtcState()),
+                    iceTransportPolicy: nextPolicy,
+                  }),
+                );
+              }}
+            >
+              <option value="all">all (Direct + TURN fallback)</option>
+              <option value="relay">relay (Forced TURN)</option>
+            </select>
+
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleStartWebRtcNegotiation}
+              disabled={
+                !socketConnected ||
+                !roomId ||
+                peerState !== 'connected' ||
+                negotiationDuty !== 'offerer' ||
+                webrtc.status === 'negotiating'
+              }
+            >
+              Start WebRTC Negotiation
+            </button>
+          </div>
         </div>
 
         <div className="webrtc-summary-grid">
@@ -730,7 +757,42 @@ function App({ signalingClient, initialState } = {}) {
             </span>
             <span className="status-hint">shipri-diagnostic</span>
           </div>
+
+          <div className="status-card">
+            <span className="status-label">Selected Path</span>
+            <span
+              className={`status-value${
+                webrtc.selectedPath?.mode === 'unknown'
+                  ? ' status-value--muted'
+                  : ''
+              }`}
+            >
+              {webrtc.selectedPath?.mode ?? 'unknown'}
+            </span>
+            <span className="status-hint">
+              {`Policy: ${webrtc.iceTransportPolicy ?? 'all'} | Local: ${webrtc.selectedPath?.localCandidateType ?? 'none'} / Remote: ${webrtc.selectedPath?.remoteCandidateType ?? 'none'}`}
+            </span>
+          </div>
+
+          <div className="status-card">
+            <span className="status-label">Candidate Types</span>
+            <span className="status-value">
+              {`Local h:${webrtc.candidateTypes?.local?.host ?? 0} s:${webrtc.candidateTypes?.local?.srflx ?? 0} r:${webrtc.candidateTypes?.local?.relay ?? 0}`}
+            </span>
+            <span className="status-hint">
+              {`Remote h:${webrtc.candidateTypes?.remote?.host ?? 0} s:${webrtc.candidateTypes?.remote?.srflx ?? 0} r:${webrtc.candidateTypes?.remote?.relay ?? 0} (IPs redacted)`}
+            </span>
+          </div>
         </div>
+
+        {webrtc.selectedPath?.relayWarning ? (
+          <div className="webrtc-stall-notice" role="status" aria-live="polite">
+            <span className="event-log-badge event-log-badge--warning">
+              Relayed via TURN
+            </span>
+            <span className="webrtc-stall-text">{RELAY_BANDWIDTH_WARNING}</span>
+          </div>
+        ) : null}
 
         {webrtc.stalledGathering ? (
           <div className="webrtc-stall-notice" role="status" aria-live="polite">
