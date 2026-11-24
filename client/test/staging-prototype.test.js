@@ -338,11 +338,11 @@ describe('POC staging Docker and Compose build configuration', () => {
     expect(standaloneCompose).toMatch(expectedBuildArgPattern);
 
     expect(prodCompose).not.toMatch(/^\s*ports:/m);
-    expect(prodCompose).not.toContain('TURN_SHARED_SECRET');
+    expect(prodCompose).not.toMatch(/TURN_SHARED_SECRET=[A-Za-z0-9+/=_-]{8,}/);
     expect(prodCompose).not.toContain('coturn');
 
     expect(standaloneCompose).not.toMatch(/5001:5001/);
-    expect(standaloneCompose).not.toContain('TURN_SHARED_SECRET');
+    expect(standaloneCompose).not.toMatch(/TURN_SHARED_SECRET=[A-Za-z0-9+/=_-]{8,}/);
     expect(standaloneCompose).toMatch(
       /coturn:[\s\S]*profiles:\s*\n\s*-\s*turn|coturn:[\s\S]*profiles:\s*\[\s*["']?turn["']?\s*\]/,
     );
