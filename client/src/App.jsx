@@ -17,6 +17,7 @@ import {
   shouldClearDraftRoomInput,
 } from './prototype/diagnostic-state.js';
 import { createInitialIceDiagnosticsState } from './prototype/ice-diagnostics.js';
+import { generatePrototypeRoomAuth } from './prototype/room-auth.js';
 import {
   MALFORMED_TEST_SCENARIOS,
   resolveRoomErrorDescriptor,
@@ -113,6 +114,8 @@ function App({ signalingClient, initialState } = {}) {
   const webrtcHarnessRef = useRef(null);
   const diagnosticChannelRef = useRef(null);
   const [joinRoomId, setJoinRoomId] = useState('');
+  const [joinAuthToken, setJoinAuthToken] = useState('');
+  const [prototypeAuthPair, setPrototypeAuthPair] = useState(null);
   const [diagnosticText, setDiagnosticText] = useState('');
   const [prototypeState, setPrototypeState] = useState(() => {
     const baseState = createInitialPrototypeState(initialState);
@@ -218,9 +221,28 @@ function App({ signalingClient, initialState } = {}) {
     return createRoomLifecycleActions(client, setPrototypeState);
   };
 
+  const handleGenerateAuthPair = async () => {
+    try {
+      const nextPair = await generatePrototypeRoomAuth();
+      setPrototypeAuthPair(nextPair);
+      setJoinAuthToken(nextPair.authToken);
+    } catch {
+      setPrototypeAuthPair(null);
+    }
+  };
+
+  const handleClearAuthPair = () => {
+    setPrototypeAuthPair(null);
+    setJoinAuthToken('');
+  };
+
   const handleCreateRoom = () => {
     const actions = getLifecycleActions();
     if (!actions || !socketConnected || roomId) {
+      return;
+    }
+    if (prototypeAuthPair?.authVerifier) {
+      actions.createRoom({ authVerifier: prototypeAuthPair.authVerifier });
       return;
     }
     actions.createRoom();
@@ -230,6 +252,11 @@ function App({ signalingClient, initialState } = {}) {
     event.preventDefault();
     const actions = getLifecycleActions();
     if (!actions || !socketConnected || roomId) {
+      return;
+    }
+    const trimmedToken = joinAuthToken.trim();
+    if (trimmedToken !== '') {
+      actions.joinRoom(joinRoomId, { authToken: trimmedToken });
       return;
     }
     actions.joinRoom(joinRoomId);
@@ -387,6 +414,49 @@ function App({ signalingClient, initialState } = {}) {
           >
             Leave Room
           </button>
+        </div>
+
+        <div
+          className="room-controls-actions"
+          aria-label="Prototype-only room authorization controls"
+        >
+          <span className="status-hint">
+            Prototype-only HKDF room auth (optional; kept in memory only):
+          </span>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => void handleGenerateAuthPair()}
+            disabled={!socketConnected || Boolean(roomId)}
+          >
+            Generate Auth Pair
+          </button>
+          <label className="sr-only" htmlFor="join-room-auth-token">
+            Room Auth Token (Prototype-only)
+          </label>
+          <input
+            id="join-room-auth-token"
+            name="authToken"
+            type="password"
+            className="room-id-input"
+            value={joinAuthToken}
+            onChange={(event) => setJoinAuthToken(event.target.value)}
+            placeholder="Optional Room Auth Token"
+            aria-label="Room Auth Token"
+            autoComplete="off"
+            spellCheck={false}
+            disabled={!socketConnected || Boolean(roomId)}
+          />
+          {prototypeAuthPair || joinAuthToken ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleClearAuthPair}
+              disabled={Boolean(roomId)}
+            >
+              Clear Auth
+            </button>
+          ) : null}
         </div>
       </section>
 
