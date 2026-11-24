@@ -152,6 +152,7 @@ describe('createInitialWebRtcState and baseline prototype state compatibility', 
     const initialWebRtc = createInitialWebRtcState();
     expect(initialWebRtc).toEqual({
       status: 'idle',
+      iceTransportPolicy: 'all',
       generation: 0,
       remoteGeneration: null,
       activePeerId: null,
@@ -169,6 +170,16 @@ describe('createInitialWebRtcState and baseline prototype state compatibility', 
       remoteCandidatesApplied: 0,
       queuedCandidateCount: 0,
       staleEventsIgnored: 0,
+      candidateTypes: {
+        local: { host: 0, srflx: 0, prflx: 0, relay: 0 },
+        remote: { host: 0, srflx: 0, prflx: 0, relay: 0 },
+      },
+      selectedPath: {
+        mode: 'unknown',
+        localCandidateType: null,
+        remoteCandidateType: null,
+        relayWarning: false,
+      },
       lastError: null,
     });
 

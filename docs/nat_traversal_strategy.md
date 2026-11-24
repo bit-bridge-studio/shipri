@@ -195,7 +195,7 @@ syslog
    });
    ```
 6. **Bandwidth Warning**: If the selected ICE candidate is a `relay` candidate, notify the user in the UI: *"Direct P2P connection could not be established. Relaying via secure server (speed may be reduced)."*
-7. **Prototype Transport Policy and Candidate-Pair Diagnostics (`FP-5`)**: The Part 3 frontend prototype adds selectable `iceTransportPolicy` modes (`"all"` for direct-preferred and `"relay"` for forced-TURN verification), summarizes gathered candidate types (`host`, `srflx`, `relay`), inspects `RTCPeerConnection.getStats()` to report whether the selected active candidate pair is `direct` or `relay`, displays the bandwidth notice above when relayed, and surfaces `SERVER_BUSY` or ICE/TURN connectivity errors cleanly without ever logging `TURN_SHARED_SECRET`, raw TURN credentials, or raw candidate IP details.
+7. **Prototype Transport Policy and Candidate-Pair Diagnostics (`FP-5`)**: Implemented in `client/src/prototype/webrtc-harness.js` and `client/src/App.jsx`. The prototype provides selectable `iceTransportPolicy` modes (`"all"` for direct-preferred and `"relay"` for forced-TURN verification), summarizes gathered candidate types (`host`, `srflx`, `prflx`, `relay`) via `extractCandidateType`, inspects `RTCPeerConnection.getStats()` via `inspectSelectedPathFromStats` to report whether the selected active candidate pair is `direct` or `relay`, renders `RELAY_BANDWIDTH_WARNING` when relayed, and surfaces `SERVER_BUSY` or ICE/TURN connectivity errors cleanly without ever logging `TURN_SHARED_SECRET`, raw TURN credentials, or candidate IP details.
 
 ---
 

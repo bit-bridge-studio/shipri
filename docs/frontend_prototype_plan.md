@@ -324,6 +324,8 @@ All modules and controls under `client/src/prototype/` (`webrtc-harness.js`, `di
 
 ### FP-5: Add NAT and TURN Diagnostics
 
+**Status:** Completed (`2026-11-24`) - added selectable `iceTransportPolicy` (`"all"` and `"relay"`), gathered candidate-type counters (`host`, `srflx`, `prflx`, `relay`), `getStats()` selected-path inspection (`direct` vs `relay`) with `RELAY_BANDWIDTH_WARNING`, and unit tests (`client/test/nat-turn-diagnostics.test.js`) without credential or IP leakage.
+
 **Dependency:** full backend stages `BE-4` and `BE-6`.
 
 **Work:**

@@ -508,6 +508,19 @@ body {
   gap: 0.3rem;
 }
 
+.webrtc-harness-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.policy-select-label {
+  font-size: 0.8rem;
+  color: #9aa7b5;
+  font-weight: 500;
+}
+
 .diagnostic-channel-title {
   margin: 0;
   font-size: 1.05rem;
@@ -830,6 +843,12 @@ body {
 
   .webrtc-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .webrtc-harness-controls {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .diagnostic-channel {

@@ -3,6 +3,13 @@ import { validateIceCredentialsPayload } from './ice-diagnostics.js';
 
 export const ICE_GATHERING_STALL_TIMEOUT_MS = 5000;
 export const DIAGNOSTIC_CHANNEL_LABEL = 'shipri-diagnostic';
+export const VALID_ICE_TRANSPORT_POLICIES = Object.freeze(['all', 'relay']);
+export const RELAY_BANDWIDTH_WARNING =
+  'Direct P2P connection could not be established. Relaying via secure server (speed may be reduced).';
+
+const VALID_CANDIDATE_TYPES = new Set(['host', 'srflx', 'prflx', 'relay']);
+const VALID_PATH_MODES = new Set(['unknown', 'direct', 'relay']);
+const CANDIDATE_TYPE_PATTERN = /\btyp\s+(host|srflx|prflx|relay)\b/i;
 
 const ROOM_ID_PATTERN = /^ship-[a-f0-9]{4}$/;
 const SAFE_PEER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -146,6 +153,180 @@ function isValidCandidatePayload(candidate) {
   return isPlainObject(candidate);
 }
 
+function createEmptyCandidateTypeCounts() {
+  return {
+    host: 0,
+    srflx: 0,
+    prflx: 0,
+    relay: 0,
+  };
+}
+
+function normalizeCandidateTypeCounts(value) {
+  const source = isPlainObject(value) ? value : {};
+  return {
+    host: toNonNegativeInt(source.host),
+    srflx: toNonNegativeInt(source.srflx),
+    prflx: toNonNegativeInt(source.prflx),
+    relay: toNonNegativeInt(source.relay),
+  };
+}
+
+function normalizeCandidateTypes(value) {
+  const source = isPlainObject(value) ? value : {};
+  return {
+    local: normalizeCandidateTypeCounts(source.local),
+    remote: normalizeCandidateTypeCounts(source.remote),
+  };
+}
+
+function normalizeCandidateTypeName(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return VALID_CANDIDATE_TYPES.has(normalized) ? normalized : null;
+}
+
+function normalizeSelectedPath(value) {
+  const source = isPlainObject(value) ? value : {};
+  const mode = normalizeEnum(source.mode, VALID_PATH_MODES, 'unknown');
+  return {
+    mode,
+    localCandidateType: normalizeCandidateTypeName(source.localCandidateType),
+    remoteCandidateType: normalizeCandidateTypeName(source.remoteCandidateType),
+    relayWarning:
+      typeof source.relayWarning === 'boolean'
+        ? source.relayWarning
+        : mode === 'relay',
+  };
+}
+
+function normalizeIceTransportPolicy(policy) {
+  return policy === 'relay' ? 'relay' : 'all';
+}
+
+/**
+ * Extracts only the sanitized ICE candidate type (host, srflx, prflx, relay)
+ * without retaining IP addresses, ports, or raw candidate strings.
+ */
+export function extractCandidateType(candidateLike) {
+  if (candidateLike === null || candidateLike === undefined) {
+    return null;
+  }
+
+  if (typeof candidateLike === 'object' && typeof candidateLike.type === 'string') {
+    const directType = normalizeCandidateTypeName(candidateLike.type);
+    if (directType) {
+      return directType;
+    }
+  }
+
+  const candidateString =
+    typeof candidateLike === 'string'
+      ? candidateLike
+      : typeof candidateLike?.candidate === 'string'
+        ? candidateLike.candidate
+        : '';
+  if (!candidateString) {
+    return null;
+  }
+
+  const match = CANDIDATE_TYPE_PATTERN.exec(candidateString);
+  return match ? normalizeCandidateTypeName(match[1]) : null;
+}
+
+/**
+ * Inspects an RTCPeerConnection stats report and returns only a sanitized
+ * direct-versus-relay path summary with zero IPs, ports, or credentials.
+ */
+export function inspectSelectedPathFromStats(statsReport) {
+  if (!statsReport) {
+    return normalizeSelectedPath({});
+  }
+
+  const recordsById = new Map();
+  const pairs = [];
+  let transportSelectedPairId = null;
+
+  const entries =
+    typeof statsReport.values === 'function'
+      ? [...statsReport.values()]
+      : Array.isArray(statsReport)
+        ? statsReport
+        : [];
+
+  for (const record of entries) {
+    if (!record || typeof record !== 'object') {
+      continue;
+    }
+    if (typeof record.id === 'string') {
+      recordsById.set(record.id, record);
+    }
+    if (
+      record.type === 'transport' &&
+      typeof record.selectedCandidatePairId === 'string'
+    ) {
+      transportSelectedPairId = record.selectedCandidatePairId;
+    }
+    if (record.type === 'candidate-pair') {
+      pairs.push(record);
+    }
+  }
+
+  if (typeof statsReport.forEach === 'function' && recordsById.size === 0) {
+    statsReport.forEach((record, key) => {
+      if (!record || typeof record !== 'object') {
+        return;
+      }
+      if (typeof key === 'string') {
+        recordsById.set(key, record);
+      }
+    });
+  }
+
+  let selectedPair =
+    (transportSelectedPairId && recordsById.get(transportSelectedPairId)) ||
+    pairs.find((pair) => pair.selected === true) ||
+    pairs.find((pair) => pair.nominated === true && pair.state === 'succeeded') ||
+    pairs.find((pair) => pair.state === 'succeeded') ||
+    null;
+
+  if (!selectedPair) {
+    return normalizeSelectedPath({});
+  }
+
+  const localRecord =
+    typeof selectedPair.localCandidateId === 'string'
+      ? recordsById.get(selectedPair.localCandidateId)
+      : null;
+  const remoteRecord =
+    typeof selectedPair.remoteCandidateId === 'string'
+      ? recordsById.get(selectedPair.remoteCandidateId)
+      : null;
+
+  const localCandidateType = normalizeCandidateTypeName(
+    localRecord?.candidateType,
+  );
+  const remoteCandidateType = normalizeCandidateTypeName(
+    remoteRecord?.candidateType,
+  );
+
+  let mode = 'unknown';
+  if (localCandidateType === 'relay' || remoteCandidateType === 'relay') {
+    mode = 'relay';
+  } else if (localCandidateType !== null || remoteCandidateType !== null) {
+    mode = 'direct';
+  }
+
+  return normalizeSelectedPath({
+    mode,
+    localCandidateType,
+    remoteCandidateType,
+    relayWarning: mode === 'relay',
+  });
+}
+
 /**
  * Creates the initial sanitized state snapshot for the WebRTC signaling harness.
  * @param {Record<string, unknown>} [overrides]
@@ -166,6 +347,7 @@ export function createInitialWebRtcState(overrides = {}) {
 
   return {
     status: normalizeEnum(source.status, VALID_HARNESS_STATUSES, 'idle'),
+    iceTransportPolicy: normalizeIceTransportPolicy(source.iceTransportPolicy),
     generation: toNonNegativeInt(source.generation),
     remoteGeneration: normalizePositiveIntOrNull(source.remoteGeneration),
     activePeerId: normalizePeerId(source.activePeerId),
@@ -203,6 +385,8 @@ export function createInitialWebRtcState(overrides = {}) {
     remoteCandidatesApplied: toNonNegativeInt(source.remoteCandidatesApplied),
     queuedCandidateCount: toNonNegativeInt(source.queuedCandidateCount),
     staleEventsIgnored: toNonNegativeInt(source.staleEventsIgnored),
+    candidateTypes: normalizeCandidateTypes(source.candidateTypes),
+    selectedPath: normalizeSelectedPath(source.selectedPath),
     lastError: sanitizeWebRtcError(source.lastError),
   };
 }
@@ -291,6 +475,10 @@ export function createWebRtcHarness(options = {}) {
   let iceServers = Array.isArray(options.iceServers)
     ? options.iceServers
     : null;
+  let iceTransportPolicy = normalizeIceTransportPolicy(
+    options.iceTransportPolicy,
+  );
+  const allowTurn = options.allowTurn === true;
   let iceRequestedForRoom = false;
   let pendingNegotiation = false;
   let pendingOffer = null;
@@ -307,11 +495,16 @@ export function createWebRtcHarness(options = {}) {
   let pendingRemoteCandidates = [];
   let iceGatheringTimerId = null;
 
-  let currentState = createInitialWebRtcState();
+  let currentState = createInitialWebRtcState({ iceTransportPolicy });
 
   function cloneStateSnapshot(state) {
     return {
       ...state,
+      candidateTypes: {
+        local: { ...state.candidateTypes.local },
+        remote: { ...state.candidateTypes.remote },
+      },
+      selectedPath: { ...state.selectedPath },
       lastError: state.lastError ? { ...state.lastError } : null,
     };
   }
@@ -320,6 +513,7 @@ export function createWebRtcHarness(options = {}) {
     currentState = createInitialWebRtcState({
       ...currentState,
       ...partial,
+      iceTransportPolicy,
       generation: localGeneration,
       remoteGeneration: expectedRemoteGeneration,
       activePeerId: activeRemotePeerId,
@@ -330,6 +524,43 @@ export function createWebRtcHarness(options = {}) {
       subscriber(snapshot);
     }
     return snapshot;
+  }
+
+  function recordCandidateType(direction, candidateLike) {
+    const candidateType = extractCandidateType(candidateLike);
+    if (!candidateType) {
+      return;
+    }
+    const nextDirectionCounts = {
+      ...currentState.candidateTypes[direction],
+      [candidateType]: currentState.candidateTypes[direction][candidateType] + 1,
+    };
+    emitState({
+      candidateTypes: {
+        ...currentState.candidateTypes,
+        [direction]: nextDirectionCounts,
+      },
+    });
+  }
+
+  async function refreshSelectedPathForSession(sessionGen, pc) {
+    if (
+      !isSessionActive(sessionGen, pc) ||
+      typeof pc.getStats !== 'function'
+    ) {
+      return null;
+    }
+    try {
+      const stats = await pc.getStats();
+      if (!isSessionActive(sessionGen, pc)) {
+        return null;
+      }
+      const nextPath = inspectSelectedPathFromStats(stats);
+      emitState({ selectedPath: nextPath });
+      return nextPath;
+    } catch {
+      return null;
+    }
   }
 
   function clearIceGatheringTimer() {
@@ -530,6 +761,11 @@ export function createWebRtcHarness(options = {}) {
       stalledGathering: false,
       stalledDiagnostic: null,
       localDescriptionForwarded: false,
+      candidateTypes: {
+        local: createEmptyCandidateTypeCounts(),
+        remote: createEmptyCandidateTypeCounts(),
+      },
+      selectedPath: normalizeSelectedPath({}),
       staleEventsIgnored: preserveStaleCount
         ? currentState.staleEventsIgnored
         : 0,
@@ -554,7 +790,7 @@ export function createWebRtcHarness(options = {}) {
     expectedRemoteGeneration = null;
     pendingRemoteCandidates = [];
 
-    currentState = createInitialWebRtcState();
+    currentState = createInitialWebRtcState({ iceTransportPolicy });
     const snapshot = cloneStateSnapshot(currentState);
     for (const subscriber of [...stateSubscribers]) {
       subscriber(snapshot);
@@ -615,6 +851,10 @@ export function createWebRtcHarness(options = {}) {
         ? { stalledGathering: false, stalledDiagnostic: null }
         : {}),
     });
+
+    if (nextStatus === 'connected') {
+      void refreshSelectedPathForSession(sessionGen, pc);
+    }
   }
 
   function createPeerConnectionInstance(config) {
@@ -667,6 +907,7 @@ export function createWebRtcHarness(options = {}) {
         emitState({
           localCandidatesSent: currentState.localCandidatesSent + 1,
         });
+        recordCandidateType('local', serialized);
       } catch (error) {
         if (!isSessionActive(sessionGen, pc)) {
           return;
@@ -721,6 +962,7 @@ export function createWebRtcHarness(options = {}) {
       emitState({
         remoteCandidatesApplied: currentState.remoteCandidatesApplied + 1,
       });
+      recordCandidateType('remote', candidate);
     } catch (error) {
       if (!isSessionActive(sessionGen, pc)) {
         return;
@@ -831,7 +1073,7 @@ export function createWebRtcHarness(options = {}) {
     try {
       pc = createPeerConnectionInstance({
         iceServers: effectiveIceServers,
-        iceTransportPolicy: 'all',
+        iceTransportPolicy,
         roomId: activeRoomId,
         peerId: activeRemotePeerId,
         generation: sessionGen,
@@ -965,7 +1207,7 @@ export function createWebRtcHarness(options = {}) {
     try {
       pc = createPeerConnectionInstance({
         iceServers,
-        iceTransportPolicy: 'all',
+        iceTransportPolicy,
         roomId: activeRoomId,
         peerId,
         generation: sessionGen,
@@ -1364,6 +1606,7 @@ export function createWebRtcHarness(options = {}) {
 
     const validation = validateIceCredentialsPayload(payload, {
       expectedRoomId: activeRoomId,
+      allowTurn: allowTurn || iceTransportPolicy === 'relay',
     });
     if (!validation.ok) {
       iceRequestedForRoom = false;
@@ -1572,6 +1815,25 @@ export function createWebRtcHarness(options = {}) {
     return true;
   }
 
+  function setIceTransportPolicy(nextPolicy) {
+    if (disposed) {
+      return false;
+    }
+    if (nextPolicy !== 'all' && nextPolicy !== 'relay') {
+      return false;
+    }
+    iceTransportPolicy = nextPolicy;
+    emitState({ iceTransportPolicy });
+    return true;
+  }
+
+  function refreshSelectedPath() {
+    if (disposed || activeSessionGeneration === null || !activePc) {
+      return Promise.resolve(null);
+    }
+    return refreshSelectedPathForSession(activeSessionGeneration, activePc);
+  }
+
   function startNegotiation(startOptions = {}) {
     const overrideServers = isPlainObject(startOptions)
       ? startOptions.iceServers
@@ -1597,6 +1859,8 @@ export function createWebRtcHarness(options = {}) {
     subscribeState,
     startNegotiation,
     setIceServers,
+    setIceTransportPolicy,
+    refreshSelectedPath,
     getPeerConnection: () => activePc,
     getDataChannel: () => activeDataChannel,
     handleServerEvent,

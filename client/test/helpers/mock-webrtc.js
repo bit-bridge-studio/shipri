@@ -285,6 +285,45 @@ export function createMockPeerConnection(config = {}, behavior = {}) {
       pc.addedIceCandidates.push(candidate);
     },
 
+    setMockStats(customStats) {
+      behavior.stats = customStats;
+    },
+
+    async getStats() {
+      if (behavior.stats) {
+        return behavior.stats;
+      }
+
+      const candidateType =
+        config.iceTransportPolicy === 'relay' ? 'relay' : 'srflx';
+      return new Map([
+        [
+          'mock-pair',
+          {
+            type: 'candidate-pair',
+            state: 'succeeded',
+            nominated: true,
+            localCandidateId: 'mock-local',
+            remoteCandidateId: 'mock-remote',
+          },
+        ],
+        [
+          'mock-local',
+          {
+            type: 'local-candidate',
+            candidateType,
+          },
+        ],
+        [
+          'mock-remote',
+          {
+            type: 'remote-candidate',
+            candidateType,
+          },
+        ],
+      ]);
+    },
+
     close() {
       pc.closeCalls += 1;
       if (pc.closed) {
