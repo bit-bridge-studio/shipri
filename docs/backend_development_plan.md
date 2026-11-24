@@ -166,6 +166,8 @@ Full backend development begins only after:
 
 ### BE-7: Backend Acceptance Gate
 
+**Status:** Completed (`2026-11-24`) - added readiness (`GET /ready`), non-tracking aggregate operational metrics (`GET /metrics` and `getOperationalMetrics()`), idempotent graceful `SIGTERM`/`SIGINT` shutdown and room cleanup, integrated acceptance suite (`server/test/backend-acceptance-gate.test.js`), completed backend security audit checklist (`docs/security_audit_open_source.md` Section `5`), verified deployment config validation and rollback procedures (`docs/deployment_docker_spec.md` Subsection `6.2`), and froze all full-backend contracts for Part 4 (`frontend_development_plan.md`) in Section `4` below.
+
 **Dependency:** frontend prototype stage `FP-6`.
 
 **Work:**
@@ -194,3 +196,29 @@ At the end of each backend stage, run:
 * `docker compose config` when deployment configuration changes.
 * Frontend prototype room, WebRTC, and forced-TURN scenarios where relevant.
 * Clean Docker builds and forced-TURN validation for deployment stages.
+
+---
+
+## 4. Full Backend Acceptance Gate Sign-Off (`BE-7`)
+
+Recorded on `2026-11-24` as the contract freeze before Part 4 (`frontend_development_plan.md`) begins:
+
+### 4.1. Frozen Backend Contracts for Part 4
+
+* **Socket.IO Signaling & Validation (`signaling_protocol_spec.md`)**: `room:create`, `room:created`, `room:join`, `room:joined`, `peer:joined`, `room:leave`, `peer:left`, `signal:forward`, `signal:receive`, `ice:get`, `ice:credentials`, and `room:error` (`INVALID_PAYLOAD`, `INVALID_ROOM_ID`, `ROOM_NOT_FOUND`, `UNAUTHORIZED`, `ROOM_FULL`, `PEER_UNAVAILABLE`, `RATE_LIMITED`, `SERVER_BUSY`), opaque `signalData` bounded at `65536` bytes (`maxHttpBufferSize`), equal-peer `offerer`/`answerer` signaling-only duties, and atomic no-op error handling.
+* **Room Authorization (`server/src/room-auth.js`)**: `REQUIRE_ROOM_AUTH=true` mandatory in production; HKDF-SHA256 (`salt: "shipri-room-auth-salt-v1"`, `info: "shipri-room-auth-v1"`) derived `authToken` and 43-char base64url `SHA-256` `authVerifier` verified in constant time before `ROOM_FULL`; idle TTL (`ROOM_IDLE_TTL_MS`), hard max lifetime (`ROOM_MAX_LIFETIME_MS`), periodic GC, and O(1) disconnect cleanup.
+* **ICE & Ephemeral TURN (`server/src/ice-service.js`, `coturn/turnserver.conf`)**: Authorized `ice:get` returning environment-driven STUN plus HMAC-SHA1 ephemeral TURN credentials (`TURN_CREDENTIAL_TTL_SECONDS = 7200`), fail-closed `SERVER_BUSY` when `REQUIRE_TURN=true` lacks valid configuration, `TURN_SHARED_SECRET` kept strictly non-enumerable in `WeakMap` and never exposed to clients or logs, and hardened `coturn` SSRF/quota/TLS profile.
+* **Operational Endpoints & Graceful Shutdown (`server/src/server.js`, `server/src/index.js`)**:
+  * `GET /health` (`Cache-Control: no-store`): `{ status: "ok", roomsCount }`
+  * `GET /ready` (`Cache-Control: no-store`): `200` `{ status: "ready", roomsCount, maxRooms }` when accepting traffic with valid ICE/TURN configuration; `503` `{ status: "not_ready" }` during shutdown or missing required TURN config.
+  * `GET /metrics` (`Cache-Control: no-store`): privacy-safe aggregate operational metrics (`status`, `uptimeSeconds`, `activeRoomsCount`, `maxRooms`, `roomsCreatedTotal`, `roomsExpiredTotal`, `errorsByCode`) with zero user tracking, zero room/peer/socket IDs, zero client IPs, and zero secrets.
+  * `SIGTERM` / `SIGINT` invoke idempotent `close()`, flipping readiness to `not_ready`, stopping timers, disconnecting active sockets, and clearing `roomStore` and `rateLimiter`.
+
+### 4.2. Acceptance Gate Verification Summary
+
+* `npm --prefix server run check`: passed across all `server/src/*.js` modules.
+* `npm --prefix server test`: `19` test files passed, `249` tests passed (`0` failed, `0` skipped), including `server/test/backend-acceptance-gate.test.js`, `server/test/coturn-hardening.test.js`, `server/test/deployment-config.test.js`, `server/test/ice-turn.test.js`, `server/test/abuse-controls.test.js`, and `server/test/room-lifecycle-security.test.js`.
+* `npm --prefix client test`: `14` test files passed, `87` tests passed (`0` failed, `0` skipped), including `client/test/prototype-backend-acceptance.test.js` (`FP-6`) and `client/test/nat-turn-diagnostics.test.js` (`FP-5`).
+* `npm --prefix client run build`: passed (`vite v5.4.21`, `67` modules transformed).
+* `docker compose config -q` across `docker-compose.yml`, `docker-compose.yml --profile turn`, and `docker-compose.prod.yml`: exited `0` with zero committed secrets.
+* External pre-DNS staging note: live remote HTTPS/WSS and two-network forced-TURN staging checks against `https://poc.shipri.app` and `turn.shipri.app` remain pending external DNS assignment and host `coturn` deployment; local live Socket.IO full-backend integration and all automated gates are verified.

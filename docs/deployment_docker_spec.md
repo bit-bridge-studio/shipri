@@ -514,3 +514,25 @@ Before running `docker compose up -d` (or `docker compose --profile turn up -d`)
 4. Ensure firewall rules open `80/tcp` and `443/tcp` for Caddy/`nginx-proxy`, `3478` (UDP/TCP) and configured Coturn relay ports (plus `443/tcp` on `turn.shipri.app` if enabled), while keeping internal `5001/tcp` (`shipri-server`) unexposed externally.
 5. Configure `coturn/turnserver.conf` with the external IP, realm (`turn.shipri.app`), TLS certificate paths, and bandwidth quotas defined in `nat_traversal_strategy.md` Section `4`.
 6. Confirm `GET /health` exposes only `{ status, roomsCount }` (`Cache-Control: no-store`), and ensure proxy/container logs never record `authToken`, `authVerifier`, `TURN_SHARED_SECRET`, TURN credentials, `#key=` URL fragments, client IPs in app logs, unnecessary `socket.id` values, or WebRTC `signalData`.
+
+### 6.2. Operational Endpoints, Graceful Shutdown, and Rollback Verification (`BE-7`)
+
+* **Health, Readiness, and Non-Tracking Metrics (`Cache-Control: no-store`)**:
+  * `GET /health`: returns `200 OK` `{ status: "ok", roomsCount }` for container liveness probes.
+  * `GET /ready`: returns `200 OK` `{ status: "ready", roomsCount, maxRooms }` when the server is accepting traffic and ICE/TURN configuration validates cleanly (`resolveIceServers().ok === true`); returns `503 Service Unavailable` `{ status: "not_ready" }` during shutdown or when required TURN settings are unavailable.
+  * `GET /metrics`: returns purely aggregate capacity and error-code counters (`status`, `uptimeSeconds`, `activeRoomsCount`, `maxRooms`, `roomsCreatedTotal`, `roomsExpiredTotal`, `errorsByCode`) with zero user tracking, zero room/peer/socket IDs, zero client IPs, and zero secrets. Keep `/metrics` internal to the container network or private operator probes unless explicitly gated at the reverse proxy.
+* **Graceful Shutdown**: `server/src/index.js` traps `SIGTERM` and `SIGINT`, logs `Signaling server shutting down (<signal>)`, marks readiness as `not_ready`, stops the room cleanup timer, disconnects active sockets, clears `activeRooms`, `socketRooms`, and `rateLimiter`, and closes the HTTP/Socket.IO server cleanly.
+* **Configuration Validation & Rollback Procedure**:
+  1. Validate Compose manifests before rollout:
+     ```bash
+     docker compose -f docker-compose.yml config -q
+     docker compose -f docker-compose.yml --profile turn config -q
+     docker compose -f docker-compose.prod.yml config -q
+     ```
+  2. Validate server syntax and automated acceptance checks before deploying:
+     ```bash
+     npm --prefix server run check
+     npm --prefix server test
+     npm --prefix client test && npm --prefix client run build
+     ```
+  3. Roll back a faulty release by checking out the previously known-good git tag/commit (keeping host `.env` and `coturn` secrets intact), rebuilding and restarting containers (`docker compose -f docker-compose.prod.yml up -d --build` or `docker compose --profile turn up -d --build`), and confirming `GET /health` (`200 OK`) and `GET /ready` (`200 OK`) recover. Because rooms are ephemeral and in-memory, rollback requires no database migrations.

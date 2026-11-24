@@ -190,3 +190,11 @@ During development and CI, we must prove that the TURN server is functional and 
   * Confirms bidirectional `"shipri-diagnostic"` `ping`/`pong` and `text` exchanges succeed in both direct (`"all"`) and forced-TURN (`"relay"`) modes.
 * **Prototype Full-Backend Acceptance Suite (`client/test/prototype-backend-acceptance.test.js`)**:
   * Verifies HKDF `shipri-room-auth-v1` room authorization (`authVerifier` / `authToken`), unauthorized join and third-peer `ROOM_FULL` precedence, non-member signaling/ICE/leave isolation, `RATE_LIMITED` and `SERVER_BUSY` handling, leave/disconnect replacement and TTL expiry cleanup, direct and forced-TURN bidirectional diagnostic exchanges, zero secret leakage, and disk-to-manifest completeness of `PROTOTYPE_ONLY_MODULES`.
+
+---
+
+## 6. Full Backend Acceptance Gate Coverage (`BE-7`)
+
+* **Integrated Backend Gate Suite (`server/test/backend-acceptance-gate.test.js`)**:
+  * Validates `GET /health`, `GET /ready` (`200` healthy vs `503` when `REQUIRE_TURN=true` lacks valid configuration or during shutdown), and privacy-safe aggregate `GET /metrics` (`activeRoomsCount`, `maxRooms`, `roomsCreatedTotal`, `roomsExpiredTotal`, `errorsByCode`) asserting zero user tracking, room IDs, socket IDs, client IPs, tokens, or secrets.
+  * Exercises end-to-end authorized signaling (`REQUIRE_ROOM_AUTH=true`), `TRUST_PROXY` per-IP rate limiting (`RATE_LIMITED`), `MAX_ROOMS` capacity (`SERVER_BUSY`), HMAC-SHA1 TURN credential generation and expiry verification (`verifyTurnCredential`), idle TTL expiration cleanup, idempotent graceful `close()` teardown, `SIGTERM`/`SIGINT` wiring in `server/src/index.js`, and secret-free deployment config invariants.

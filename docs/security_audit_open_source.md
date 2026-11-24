@@ -104,3 +104,24 @@ Because the TURN server relays raw encrypted bytes when direct P2P connection fa
   * **REST API Authentication (Time-Limited Tokens)**: Never expose static TURN login/password pairs. `shipri-server` derives ephemeral credentials (`TURN_CREDENTIAL_TTL_SECONDS = 7200`, username `${expiresAt}:${opaqueRoomPeerTag}`, credential `HMAC-SHA1(TURN_SHARED_SECRET, username)` in base64) from validated environment variables (`STUN_URLS`, `TURN_URLS`, `TURN_SHARED_SECRET`).
   * **Fail-Closed Validation**: Missing or invalid `TURN_URLS` or `TURN_SHARED_SECRET` in production fails startup validation or returns `room:error` (`code: 'SERVER_BUSY'`) on `ice:get` without exposing `TURN_SHARED_SECRET` or stack details in client responses or logs.
   * **Port & Certificate Isolation**: Coturn rejects expired or invalid HMAC credentials and binds `turn.shipri.app:443` separately from Caddy (`shipri.app:443`) per `nat_traversal_strategy.md` and `deployment_docker_spec.md`.
+
+---
+
+## 5. Backend Security Audit Checklist (`BE-7` Sign-Off)
+
+Audited against the full backend implementation on `2026-11-24`:
+
+| Audit Control | Verification Status | Implementation & Test Evidence |
+| :--- | :--- | :--- |
+| Zero committed secrets or placeholder TURN credentials | Verified | `coturn/turnserver.conf` omits active `static-auth-secret`; runtime env injection in `docker-compose.yml`; checked by `server/test/deployment-config.test.js` and `server/test/coturn-hardening.test.js`. |
+| `TURN_SHARED_SECRET` isolated from logs, responses, and config serialization | Verified | Stored in module-scoped `WeakMap` (`getTurnSharedSecret` in `server/src/config.js`); absent from `JSON.stringify(config)`, `ice:credentials`, `/health`, `/ready`, `/metrics`, and logger outputs (`server/test/ice-turn.test.js`, `server/test/backend-acceptance-gate.test.js`). |
+| CSPRNG room and peer identifiers | Verified | `crypto.randomBytes` in `server/src/room-id.js`; zero `Math.random()` usage (`server/test/room-create.test.js`). |
+| Production room authorization (`REQUIRE_ROOM_AUTH=true`) & constant-time verification | Verified | `NODE_ENV=production` rejects `REQUIRE_ROOM_AUTH=false` (`server/src/config.js`); `SHA-256` + `crypto.timingSafeEqual` in `server/src/room-auth.js` enforced before `ROOM_FULL` (`server/test/room-lifecycle-security.test.js`). |
+| Strict payload schemas, canonical room IDs, and 64 KiB frame limit | Verified | Exact-field validators in `server/src/room-id.js`; opaque `signalData` untouched; `maxHttpBufferSize: 65536` in `server/src/server.js` (`server/test/room-id.test.js`, `server/test/signal-forward.test.js`). |
+| Non-member signaling, ICE, and leave isolation | Verified | O(1) `socketRooms` membership checks return `UNAUTHORIZED` with zero spoofed `signal:receive` events (`server/test/signal-forward.test.js`, `server/test/backend-acceptance-gate.test.js`). |
+| Abuse controls: `TRUST_PROXY`, per-IP `room:create` rate limiting, `MAX_ROOMS`, TTL/GC | Verified | `server/src/rate-limit.js`, `server/src/room-store.js`, `server/src/server.js`; tested in `server/test/abuse-controls.test.js` and `server/test/room-lifecycle-security.test.js`. |
+| Strict HTTP and Socket.IO CORS allowlist (no wildcard `*`) | Verified | Canonical origin parser in `server/src/config.js` applied to Express and Socket.IO (`server/test/config.test.js`, `server/test/abuse-controls.test.js`). |
+| Privacy-safe operational logging and non-tracking metrics | Verified | `server/src/logger.js` and `GET /metrics` omit `socket.id`, client IPs, `authToken`, `authVerifier`, TURN secrets/credentials, SDP, ICE candidates, and user file data (`server/test/abuse-controls.test.js`, `server/test/backend-acceptance-gate.test.js`). |
+| Hardened Coturn relay SSRF/quota/TLS controls | Verified | `coturn/turnserver.conf` enforces relay ports `49152-65535`, quotas, `stale-nonce`, `no-cli`, `no-loopback-peers`, `no-multicast-peers`, RFC1918/IPv6 `denied-peer-ip`, and modern TLS (`server/test/coturn-hardening.test.js`). |
+| Non-root container execution and lockfile-pinned builds | Verified | `server/Dockerfile` runs `npm ci --omit=dev` and `USER node`; `client/Dockerfile` runs `npm ci` (`server/test/deployment-config.test.js`). |
+| Graceful shutdown and in-memory state cleanup | Verified | `SIGTERM`/`SIGINT` in `server/src/index.js` call idempotent `close()`, flipping `/ready` to `503` and clearing `activeRooms`, `socketRooms`, and `rateLimiter` (`server/test/backend-acceptance-gate.test.js`). |

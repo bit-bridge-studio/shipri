@@ -83,8 +83,23 @@ export function createSignalingServer(options = {}) {
     now,
   });
   const { activeRooms, socketRooms } = roomStore;
+  const startedAt = now();
+  let isShuttingDown = false;
+  let closePromise = null;
+  let roomsCreatedTotal = 0;
+  let roomsExpiredTotal = 0;
+  const errorsByCode = Object.create(null);
+
+  function recordErrorMetric(code) {
+    const safeCode =
+      typeof code === 'string' && /^[A-Z0-9_]{1,64}$/.test(code)
+        ? code
+        : 'UNKNOWN_ERROR';
+    errorsByCode[safeCode] = (errorsByCode[safeCode] ?? 0) + 1;
+  }
 
   function emitRoomError(socket, error) {
+    recordErrorMetric(error.code);
     logger.roomError(error.code, error.roomId);
     socket.emit('room:error', error);
   }
@@ -93,6 +108,9 @@ export function createSignalingServer(options = {}) {
     if (!expiredRoom) {
       return;
     }
+
+    roomsExpiredTotal += 1;
+    recordErrorMetric('ROOM_NOT_FOUND');
 
     const expiryError = createRoomError(
       'ROOM_NOT_FOUND',
@@ -151,6 +169,50 @@ export function createSignalingServer(options = {}) {
     cleanupTimer.unref();
   }
 
+  function getReadinessStatus() {
+    if (isShuttingDown) {
+      return {
+        ready: false,
+        status: 'not_ready',
+      };
+    }
+
+    const iceCheck = resolveIceServers({
+      stunUrls: config.stunUrls,
+      turnUrls: config.turnUrls,
+      turnSharedSecret: getTurnSharedSecret(config),
+      turnCredentialTtlSeconds: config.turnCredentialTtlSeconds,
+      requireTurn: config.requireTurn,
+      now,
+    });
+    if (!iceCheck.ok) {
+      return {
+        ready: false,
+        status: 'not_ready',
+      };
+    }
+
+    return {
+      ready: true,
+      status: 'ready',
+      roomsCount: roomStore.size(),
+      maxRooms: config.maxRooms,
+    };
+  }
+
+  function getOperationalMetrics() {
+    const elapsedMs = Math.max(0, now() - startedAt);
+    return {
+      status: isShuttingDown ? 'shutting_down' : 'ok',
+      uptimeSeconds: Math.floor(elapsedMs / 1000),
+      activeRoomsCount: roomStore.size(),
+      maxRooms: config.maxRooms,
+      roomsCreatedTotal,
+      roomsExpiredTotal,
+      errorsByCode: { ...errorsByCode },
+    };
+  }
+
   app.get('/health', (_req, res) => {
     sweepExpiredRooms();
     res.set('Cache-Control', 'no-store');
@@ -158,6 +220,27 @@ export function createSignalingServer(options = {}) {
       status: 'ok',
       roomsCount: roomStore.size(),
     });
+  });
+
+  app.get('/ready', (_req, res) => {
+    sweepExpiredRooms();
+    res.set('Cache-Control', 'no-store');
+    const readiness = getReadinessStatus();
+    if (!readiness.ready) {
+      res.status(503).json({ status: 'not_ready' });
+      return;
+    }
+    res.status(200).json({
+      status: readiness.status,
+      roomsCount: readiness.roomsCount,
+      maxRooms: readiness.maxRooms,
+    });
+  });
+
+  app.get('/metrics', (_req, res) => {
+    sweepExpiredRooms();
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json(getOperationalMetrics());
   });
 
   io.on('connection', (socket) => {
@@ -229,6 +312,7 @@ export function createSignalingServer(options = {}) {
         socketId: socket.id,
         authVerifierHash: validation.authVerifierHash ?? null,
       });
+      roomsCreatedTotal += 1;
       socket.join(roomId);
 
       logger.roomCreated(roomId);
@@ -524,9 +608,14 @@ export function createSignalingServer(options = {}) {
   });
 
   function close() {
+    if (closePromise) {
+      return closePromise;
+    }
+
+    isShuttingDown = true;
     clearInterval(cleanupTimer);
 
-    return new Promise((resolve, reject) => {
+    closePromise = new Promise((resolve, reject) => {
       if (!httpServer.listening) {
         io.disconnectSockets(true);
         roomStore.clear();
@@ -535,6 +624,7 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
+      io.disconnectSockets(true);
       io.close((error) => {
         roomStore.clear();
         rateLimiter.clear();
@@ -545,6 +635,8 @@ export function createSignalingServer(options = {}) {
         resolve();
       });
     });
+
+    return closePromise;
   }
 
   return {
@@ -557,6 +649,8 @@ export function createSignalingServer(options = {}) {
     activeRooms,
     socketRooms,
     sweepExpiredRooms,
+    getReadinessStatus,
+    getOperationalMetrics,
     close,
   };
 }

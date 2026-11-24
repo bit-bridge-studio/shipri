@@ -15,6 +15,13 @@ export function createSafeLogger({ sink = console.log } = {}) {
     serverListening(port) {
       emit(`Signaling server listening on port ${port}`);
     },
+    serverShutdown(signal) {
+      const safeSignal =
+        typeof signal === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(signal)
+          ? signal
+          : 'UNKNOWN';
+      emit(`Signaling server shutting down (${safeSignal})`);
+    },
     roomCreated(roomId) {
       if (isValidRoomId(roomId)) {
         emit(`Room created: ${roomId}`);
