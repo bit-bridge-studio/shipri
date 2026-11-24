@@ -179,3 +179,12 @@ During development and CI, we must prove that the TURN server is functional and 
   3. Wait 5 seconds (verify transfer pauses and "Reconnecting..." UI overlay appears).
   4. Enable the network adapter (`context.setOffline(false)`).
   5. **Verification**: Verify that the connection recovers and the file transfer finishes, resulting in a correct cryptographic hash match.
+
+---
+
+## 5. Prototype NAT & Forced-TURN Diagnostic Coverage (`FP-5`)
+
+* **Unit & Harness Verification (`client/test/nat-turn-diagnostics.test.js`)**:
+  * Exercises selectable `iceTransportPolicy` modes (`"all"` and `"relay"`) across both `offerer` and `answerer` peer connections.
+  * Verifies `extractCandidateType` (`host`, `srflx`, `prflx`, `relay`) and `inspectSelectedPathFromStats` (`direct` vs `relay`, `RELAY_BANDWIDTH_WARNING`) never store, display, or log IP addresses, ports, TURN `username`/`credential` strings, or `TURN_SHARED_SECRET`.
+  * Confirms bidirectional `"shipri-diagnostic"` `ping`/`pong` and `text` exchanges succeed in both direct (`"all"`) and forced-TURN (`"relay"`) modes.
