@@ -2,8 +2,18 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
   DEFAULT_ALLOWED_ORIGINS,
+  DEFAULT_MAX_ROOMS,
+  DEFAULT_NODE_ENV,
   DEFAULT_PORT,
+  DEFAULT_ROOM_CLEANUP_INTERVAL_MS,
+  DEFAULT_ROOM_CREATE_RATE_LIMIT_MAX,
+  DEFAULT_ROOM_CREATE_RATE_LIMIT_WINDOW_MS,
+  DEFAULT_ROOM_IDLE_TTL_MS,
+  DEFAULT_ROOM_MAX_LIFETIME_MS,
   DEFAULT_STUN_URLS,
+  DEFAULT_TRUST_PROXY,
+  DEFAULT_TURN_CREDENTIAL_TTL_SECONDS,
+  DEFAULT_TURN_URLS,
   loadConfig,
 } from '../src/config.js';
 import { createSignalingServer } from '../src/server.js';
@@ -11,6 +21,10 @@ import {
   closeSocketClients,
   createSocketClient,
 } from './helpers/socket-client.js';
+import {
+  closeIsolatedServers,
+  startIsolatedServer,
+} from './helpers/test-server.js';
 
 const clients = new Set();
 const servers = new Set();
@@ -27,31 +41,11 @@ function extractComposeDefaultEnv(composeText, name) {
   return match ? match[1] : undefined;
 }
 
-async function startIsolatedServer(options) {
-  const server = createSignalingServer(options);
-  servers.add(server);
-
-  await new Promise((resolve, reject) => {
-    server.httpServer.once('error', reject);
-    server.httpServer.listen(0, '127.0.0.1', () => {
-      server.httpServer.off('error', reject);
-      resolve();
-    });
-  });
-
-  const address = server.httpServer.address();
-  return {
-    ...server,
-    baseUrl: `http://127.0.0.1:${address.port}`,
-  };
-}
-
 afterEach(async () => {
   closeSocketClients(...clients);
   clients.clear();
 
-  await Promise.all([...servers].map((server) => server.close()));
-  servers.clear();
+  await closeIsolatedServers(servers);
 });
 
 describe('loadConfig', () => {
@@ -59,43 +53,163 @@ describe('loadConfig', () => {
     const config = loadConfig({});
 
     expect(config).toEqual({
+      nodeEnv: DEFAULT_NODE_ENV,
       port: DEFAULT_PORT,
       allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
+      trustProxy: DEFAULT_TRUST_PROXY,
+      requireRoomAuth: false,
+      maxRooms: DEFAULT_MAX_ROOMS,
+      roomIdleTtlMs: DEFAULT_ROOM_IDLE_TTL_MS,
+      roomMaxLifetimeMs: DEFAULT_ROOM_MAX_LIFETIME_MS,
+      roomCleanupIntervalMs: DEFAULT_ROOM_CLEANUP_INTERVAL_MS,
+      roomCreateRateLimitMax: DEFAULT_ROOM_CREATE_RATE_LIMIT_MAX,
+      roomCreateRateLimitWindowMs: DEFAULT_ROOM_CREATE_RATE_LIMIT_WINDOW_MS,
       stunUrls: DEFAULT_STUN_URLS,
+      turnUrls: DEFAULT_TURN_URLS,
+      turnCredentialTtlSeconds: DEFAULT_TURN_CREDENTIAL_TTL_SECONDS,
+      requireTurn: false,
     });
     expect(config.port).toBe(5001);
-    expect(config.allowedOrigins).toEqual([
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      'http://localhost:5173',
-      'http://127.0.0.1:5173',
-    ]);
-    expect(config.stunUrls).toEqual([
-      'stun:stun.l.google.com:19302',
-      'stun:stun1.l.google.com:19302',
-    ]);
+    expect(config.maxRooms).toBe(5000);
+    expect(config.roomIdleTtlMs).toBe(1_800_000);
+    expect(config.roomMaxLifetimeMs).toBe(14_400_000);
+    expect(config.roomCleanupIntervalMs).toBe(60_000);
+    expect(config.roomCreateRateLimitMax).toBe(10);
+    expect(config.roomCreateRateLimitWindowMs).toBe(60_000);
+    expect(config.turnCredentialTtlSeconds).toBe(7_200);
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.allowedOrigins)).toBe(true);
     expect(Object.isFrozen(config.stunUrls)).toBe(true);
+    expect(Object.isFrozen(config.turnUrls)).toBe(true);
   });
 
-  test('parses, trims, and deduplicates valid custom environment values', () => {
+  test('parses, trims, and deduplicates valid custom full-backend environment values without exposing secrets', () => {
     const config = loadConfig({
+      NODE_ENV: 'production',
       PORT: ' 6001 ',
       ALLOWED_ORIGINS:
-        ' https://poc.shipri.app , http://localhost:3000, https://poc.shipri.app ',
+        ' https://shipri.app , https://poc.shipri.app, https://shipri.app ',
+      TRUST_PROXY: '1',
+      REQUIRE_ROOM_AUTH: 'true',
+      MAX_ROOMS: '2500',
+      ROOM_IDLE_TTL_MS: '900000',
+      ROOM_MAX_LIFETIME_MS: '7200000',
+      ROOM_CLEANUP_INTERVAL_MS: '30000',
+      ROOM_CREATE_RATE_LIMIT_MAX: '15',
+      ROOM_CREATE_RATE_LIMIT_WINDOW_MS: '120000',
       STUN_URLS:
         ' stun:stun.l.google.com:19302 , stun:stun1.l.google.com:19302, stun:stun.l.google.com:19302 ',
+      TURN_URLS:
+        ' turn:turn.shipri.app:3478?transport=udp , turns:turn.shipri.app:443?transport=tcp, turn:turn.shipri.app:3478?transport=udp ',
+      TURN_CREDENTIAL_TTL_SECONDS: '3600',
+      REQUIRE_TURN: 'true',
+      TURN_SHARED_SECRET: 'super_sensitive_hmac_secret',
     });
 
     expect(config).toEqual({
+      nodeEnv: 'production',
       port: 6001,
-      allowedOrigins: ['https://poc.shipri.app', 'http://localhost:3000'],
+      allowedOrigins: ['https://shipri.app', 'https://poc.shipri.app'],
+      trustProxy: 1,
+      requireRoomAuth: true,
+      maxRooms: 2500,
+      roomIdleTtlMs: 900_000,
+      roomMaxLifetimeMs: 7_200_000,
+      roomCleanupIntervalMs: 30_000,
+      roomCreateRateLimitMax: 15,
+      roomCreateRateLimitWindowMs: 120_000,
       stunUrls: [
         'stun:stun.l.google.com:19302',
         'stun:stun1.l.google.com:19302',
       ],
+      turnUrls: [
+        'turn:turn.shipri.app:3478?transport=udp',
+        'turns:turn.shipri.app:443?transport=tcp',
+      ],
+      turnCredentialTtlSeconds: 3600,
+      requireTurn: true,
     });
+    expect(JSON.stringify(config)).not.toContain('super_sensitive_hmac_secret');
+    expect(Object.keys(config)).not.toContain('turnSharedSecret');
+  });
+
+  test('defaults REQUIRE_ROOM_AUTH to true when NODE_ENV=production and rejects explicit false', () => {
+    const prodConfig = loadConfig({ NODE_ENV: 'production' });
+    expect(prodConfig.requireRoomAuth).toBe(true);
+
+    expect(() =>
+      loadConfig({ NODE_ENV: 'production', REQUIRE_ROOM_AUTH: 'false' }),
+    ).toThrow(/Invalid REQUIRE_ROOM_AUTH configuration/i);
+  });
+
+  test.each(['staging', 'prod', '123'])(
+    'throws a clear error for invalid NODE_ENV value %j',
+    (invalidNodeEnv) => {
+      expect(() => loadConfig({ NODE_ENV: invalidNodeEnv })).toThrow(
+        /Invalid NODE_ENV configuration/i,
+      );
+    },
+  );
+
+  test.each(['', '-1', 'yes', 'abc'])(
+    'throws a clear error for invalid REQUIRE_ROOM_AUTH value %j',
+    (invalidBool) => {
+      expect(() => loadConfig({ REQUIRE_ROOM_AUTH: invalidBool })).toThrow(
+        /Invalid REQUIRE_ROOM_AUTH configuration/i,
+      );
+    },
+  );
+
+  test.each(['', '-1', '1.5'])(
+    'throws a clear error for invalid TRUST_PROXY value %j',
+    (invalidTrustProxy) => {
+      expect(() => loadConfig({ TRUST_PROXY: invalidTrustProxy })).toThrow(
+        /Invalid TRUST_PROXY configuration/i,
+      );
+    },
+  );
+
+  test('accepts valid TRUST_PROXY boolean, hop count, and proxy keyword values', () => {
+    expect(loadConfig({ TRUST_PROXY: 'false' }).trustProxy).toBe(false);
+    expect(loadConfig({ TRUST_PROXY: 'true' }).trustProxy).toBe(true);
+    expect(loadConfig({ TRUST_PROXY: '2' }).trustProxy).toBe(2);
+    expect(loadConfig({ TRUST_PROXY: 'loopback' }).trustProxy).toBe('loopback');
+  });
+
+  test('validates MAX_ROOMS, room TTL bounds, rate limits, and TURN config ranges', () => {
+    expect(() => loadConfig({ MAX_ROOMS: '0' })).toThrow(
+      /Invalid MAX_ROOMS configuration/i,
+    );
+    expect(() => loadConfig({ MAX_ROOMS: '70000' })).toThrow(
+      /Invalid MAX_ROOMS configuration/i,
+    );
+    expect(() =>
+      loadConfig({
+        ROOM_IDLE_TTL_MS: '60000',
+        ROOM_MAX_LIFETIME_MS: '30000',
+      }),
+    ).toThrow(/ROOM_IDLE_TTL_MS/i);
+    expect(() => loadConfig({ ROOM_CLEANUP_INTERVAL_MS: '0' })).toThrow(
+      /Invalid ROOM_CLEANUP_INTERVAL_MS configuration/i,
+    );
+    expect(() => loadConfig({ ROOM_CREATE_RATE_LIMIT_MAX: '0' })).toThrow(
+      /Invalid ROOM_CREATE_RATE_LIMIT_MAX configuration/i,
+    );
+    expect(() =>
+      loadConfig({ ROOM_CREATE_RATE_LIMIT_WINDOW_MS: '-5' }),
+    ).toThrow(/Invalid ROOM_CREATE_RATE_LIMIT_WINDOW_MS configuration/i);
+    expect(() => loadConfig({ TURN_CREDENTIAL_TTL_SECONDS: '30' })).toThrow(
+      /Invalid TURN_CREDENTIAL_TTL_SECONDS configuration/i,
+    );
+    expect(() => loadConfig({ TURN_CREDENTIAL_TTL_SECONDS: '90000' })).toThrow(
+      /Invalid TURN_CREDENTIAL_TTL_SECONDS configuration/i,
+    );
+    expect(() =>
+      loadConfig({ TURN_URLS: 'stun:stun.l.google.com:19302' }),
+    ).toThrow(/Invalid TURN_URLS configuration/i);
+    expect(() =>
+      loadConfig({ TURN_URLS: 'turn:turn.shipri.app:3478?transport=sctp' }),
+    ).toThrow(/Invalid TURN_URLS configuration/i);
   });
 
   test.each(['', 'abc', '0', '-1', '65536', '5001.5'])(
@@ -145,12 +259,22 @@ describe('loadConfig', () => {
 
 describe('createSignalingServer configuration', () => {
   test('exposes validated config and enforces allowedOrigins on HTTP CORS', async () => {
-    const server = await startIsolatedServer();
+    const server = await startIsolatedServer(undefined, servers);
 
-    expect(server.config).toEqual({
+    expect(server.config).toMatchObject({
       port: DEFAULT_PORT,
       allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
       stunUrls: DEFAULT_STUN_URLS,
+      trustProxy: DEFAULT_TRUST_PROXY,
+      maxRooms: DEFAULT_MAX_ROOMS,
+      roomIdleTtlMs: DEFAULT_ROOM_IDLE_TTL_MS,
+      roomMaxLifetimeMs: DEFAULT_ROOM_MAX_LIFETIME_MS,
+      roomCleanupIntervalMs: DEFAULT_ROOM_CLEANUP_INTERVAL_MS,
+      roomCreateRateLimitMax: DEFAULT_ROOM_CREATE_RATE_LIMIT_MAX,
+      roomCreateRateLimitWindowMs: DEFAULT_ROOM_CREATE_RATE_LIMIT_WINDOW_MS,
+      turnUrls: DEFAULT_TURN_URLS,
+      turnCredentialTtlSeconds: DEFAULT_TURN_CREDENTIAL_TTL_SECONDS,
+      requireTurn: false,
     });
 
     const allowedResponse = await fetch(`${server.baseUrl}/health`, {
@@ -178,13 +302,10 @@ describe('createSignalingServer configuration', () => {
       STUN_URLS: 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302',
       TURN_SHARED_SECRET: 'ignored_in_poc',
     });
-    const server = await startIsolatedServer(stagingConfig);
+    const server = await startIsolatedServer(stagingConfig, servers);
 
-    expect(Object.keys(server.config)).toEqual([
-      'port',
-      'allowedOrigins',
-      'stunUrls',
-    ]);
+    expect(Object.keys(server.config)).not.toContain('turnSharedSecret');
+    expect(JSON.stringify(server.config)).not.toContain('ignored_in_poc');
 
     const stagingOriginResponse = await fetch(`${server.baseUrl}/health`, {
       headers: { Origin: 'https://poc.shipri.app' },
@@ -218,6 +339,9 @@ describe('createSignalingServer configuration', () => {
     expect(() => createSignalingServer({ allowedOrigins: ['*'] })).toThrow(
       /Invalid ALLOWED_ORIGINS configuration/i,
     );
+    expect(() =>
+      createSignalingServer({ nodeEnv: 'production', requireRoomAuth: false }),
+    ).toThrow(/Invalid REQUIRE_ROOM_AUTH configuration/i);
   });
 });
 
@@ -262,7 +386,7 @@ describe('Backend POC staging deployment configuration', () => {
       ALLOWED_ORIGINS: allowedOrigins,
       STUN_URLS: stunUrls,
     });
-    const server = await startIsolatedServer(stagingConfig);
+    const server = await startIsolatedServer(stagingConfig, servers);
 
     const stagingSocketCors = await fetch(
       `${server.baseUrl}/socket.io/?EIO=4&transport=polling`,

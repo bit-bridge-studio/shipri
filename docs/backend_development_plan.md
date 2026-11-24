@@ -62,6 +62,8 @@ Full backend development begins only after:
 
 ### BE-1: Establish Backend Test and Server Foundation
 
+**Status:** Completed (`2026-11-23`) - evolved `server/src/config.js`, `server/src/room-store.js`, `server/src/server.js`, and isolated test helpers while preserving the Vitest setup, `server/package-lock.json`, and all Backend POC regression tests.
+
 **Work:**
 
 * Reuse and expand the accepted Backend POC Vitest setup and `test` script.

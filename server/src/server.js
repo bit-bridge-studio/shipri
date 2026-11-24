@@ -13,54 +13,20 @@ import {
   validateRoomLeavePayload,
   validateSignalForwardPayload,
 } from './room-id.js';
+import { createRoomStore } from './room-store.js';
 
-function findSocketMembership(activeRooms, socketRooms, socketId) {
-  const roomId = socketRooms.get(socketId);
-  if (!roomId) {
-    return null;
-  }
-
-  const room = activeRooms.get(roomId);
-  if (!room) {
-    socketRooms.delete(socketId);
-    return null;
-  }
-
-  const peerIndex = room.peers.findIndex(
-    (peer) => peer.socketId === socketId,
+function removePeerFromRoom(io, roomStore, room, peerIndex, socket, reason) {
+  const { removedPeer, remainingPeer, roomDeleted } = roomStore.removePeer(
+    room,
+    peerIndex,
   );
-  if (peerIndex === -1) {
-    socketRooms.delete(socketId);
-    return null;
-  }
-
-  return { room, peerIndex };
-}
-
-function hasActiveRoomMembership(activeRooms, socketRooms, socketId) {
-  return findSocketMembership(activeRooms, socketRooms, socketId) !== null;
-}
-
-function removePeerFromRoom(
-  io,
-  activeRooms,
-  socketRooms,
-  room,
-  peerIndex,
-  socket,
-  reason,
-) {
-  const [removedPeer] = room.peers.splice(peerIndex, 1);
-  socketRooms.delete(removedPeer.socketId);
   socket.leave(room.roomId);
 
-  if (room.peers.length === 0) {
+  if (roomDeleted) {
     console.log(`Room closed after ${reason}: ${room.roomId}`);
-    activeRooms.delete(room.roomId);
     return;
   }
 
-  const remainingPeer = room.peers[0];
   io.to(remainingPeer.socketId).emit('peer:left', {
     roomId: room.roomId,
     peerId: removedPeer.peerId,
@@ -70,8 +36,10 @@ function removePeerFromRoom(
 
 export function createSignalingServer(options = {}) {
   const config = resolveServerConfig(options);
+  const now = typeof options?.now === 'function' ? options.now : () => Date.now();
 
   const app = express();
+  app.set('trust proxy', config.trustProxy);
   app.use(
     cors({
       origin: config.allowedOrigins,
@@ -88,16 +56,14 @@ export function createSignalingServer(options = {}) {
     },
   });
 
-  // Memory schema: Map<roomId, { roomId, peers, createdAt }>
-  const activeRooms = new Map();
-  // Reverse index: Map<socketId, roomId> for O(1) membership and disconnect lookup
-  const socketRooms = new Map();
+  const roomStore = createRoomStore({ now });
+  const { activeRooms, socketRooms } = roomStore;
 
   app.get('/health', (_req, res) => {
     res.set('Cache-Control', 'no-store');
     res.status(200).json({
       status: 'ok',
-      roomsCount: activeRooms.size,
+      roomsCount: roomStore.size(),
     });
   });
 
@@ -112,7 +78,7 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      if (hasActiveRoomMembership(activeRooms, socketRooms, socket.id)) {
+      if (roomStore.hasActiveRoomMembership(socket.id)) {
         socket.emit(
           'room:error',
           createRoomError(
@@ -125,22 +91,12 @@ export function createSignalingServer(options = {}) {
 
       const roomId = allocateUniqueRoomId(activeRooms);
       const peerId = generatePeerId();
-      const now = Date.now();
 
-      const room = {
+      roomStore.createRoom({
         roomId,
-        peers: [
-          {
-            peerId,
-            socketId: socket.id,
-            joinedAt: now,
-          },
-        ],
-        createdAt: now,
-      };
-
-      activeRooms.set(roomId, room);
-      socketRooms.set(socket.id, roomId);
+        peerId,
+        socketId: socket.id,
+      });
       socket.join(roomId);
 
       console.log(`Room created: ${roomId}`);
@@ -160,7 +116,7 @@ export function createSignalingServer(options = {}) {
       }
 
       const { roomId } = validation;
-      const room = activeRooms.get(roomId);
+      const room = roomStore.getRoom(roomId);
 
       if (!room) {
         socket.emit(
@@ -174,7 +130,7 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      if (hasActiveRoomMembership(activeRooms, socketRooms, socket.id)) {
+      if (roomStore.hasActiveRoomMembership(socket.id)) {
         socket.emit(
           'room:error',
           createRoomError(
@@ -200,14 +156,11 @@ export function createSignalingServer(options = {}) {
 
       const existingPeer = room.peers[0];
       const peerId = generatePeerId();
-      const now = Date.now();
 
-      room.peers.push({
+      roomStore.addPeer(room, {
         peerId,
         socketId: socket.id,
-        joinedAt: now,
       });
-      socketRooms.set(socket.id, roomId);
       socket.join(roomId);
 
       console.log(`Peer joined room: ${roomId}`);
@@ -232,7 +185,7 @@ export function createSignalingServer(options = {}) {
       }
 
       const { roomId } = validation;
-      const room = activeRooms.get(roomId);
+      const room = roomStore.getRoom(roomId);
       if (!room) {
         socket.emit(
           'room:error',
@@ -262,15 +215,7 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      removePeerFromRoom(
-        io,
-        activeRooms,
-        socketRooms,
-        room,
-        peerIndex,
-        socket,
-        'leave',
-      );
+      removePeerFromRoom(io, roomStore, room, peerIndex, socket, 'leave');
     });
 
     // 4. Forward WebRTC signaling candidates/SDP
@@ -282,7 +227,7 @@ export function createSignalingServer(options = {}) {
       }
 
       const { roomId, signalData } = validation;
-      const room = activeRooms.get(roomId);
+      const room = roomStore.getRoom(roomId);
       if (!room) {
         socket.emit(
           'room:error',
@@ -331,7 +276,7 @@ export function createSignalingServer(options = {}) {
       });
     });
 
-    // 5. Return Backend POC development-only STUN configuration for active members
+    // 5. Return development-only STUN configuration for active members
     socket.on('ice:get', (payload) => {
       const validation = validateIceGetPayload(payload);
       if (!validation.ok) {
@@ -340,7 +285,7 @@ export function createSignalingServer(options = {}) {
       }
 
       const { roomId } = validation;
-      const room = activeRooms.get(roomId);
+      const room = roomStore.getRoom(roomId);
       if (!room) {
         socket.emit(
           'room:error',
@@ -368,7 +313,7 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      // Development-only STUN response; dynamic TURN credentials are deferred to production.
+      // Development-only STUN response; dynamic TURN credentials are added in BE-4.
       const iceConfig = resolveDevelopmentIceServers(config.stunUrls);
       if (!iceConfig.ok) {
         socket.emit(
@@ -392,19 +337,14 @@ export function createSignalingServer(options = {}) {
     socket.on('disconnect', () => {
       console.log(`Socket disconnected: ${socket.id}`);
 
-      const membership = findSocketMembership(
-        activeRooms,
-        socketRooms,
-        socket.id,
-      );
+      const membership = roomStore.findSocketMembership(socket.id);
       if (!membership) {
         return;
       }
 
       removePeerFromRoom(
         io,
-        activeRooms,
-        socketRooms,
+        roomStore,
         membership.room,
         membership.peerIndex,
         socket,
@@ -417,15 +357,13 @@ export function createSignalingServer(options = {}) {
     return new Promise((resolve, reject) => {
       if (!httpServer.listening) {
         io.disconnectSockets(true);
-        activeRooms.clear();
-        socketRooms.clear();
+        roomStore.clear();
         resolve();
         return;
       }
 
       io.close((error) => {
-        activeRooms.clear();
-        socketRooms.clear();
+        roomStore.clear();
         if (error) {
           reject(error);
           return;
@@ -440,6 +378,7 @@ export function createSignalingServer(options = {}) {
     httpServer,
     io,
     config,
+    roomStore,
     activeRooms,
     socketRooms,
     close,
