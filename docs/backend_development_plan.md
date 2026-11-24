@@ -149,6 +149,8 @@ Full backend development begins only after:
 
 ### BE-6: Harden Coturn and NAT Traversal
 
+**Status:** Completed (`2026-11-24`) - hardened `coturn/turnserver.conf` (relay port range `49152-65535`, quotas, realm, `stale-nonce`, `no-cli`, `no-loopback-peers`, `no-multicast-peers`, RFC1918/IPv6 `denied-peer-ip` SSRF blocks, modern TLS), wired runtime IP/cert/secret injection in `docker-compose.yml` (`turn` profile), added `verifyTurnCredential` and `server/test/coturn-hardening.test.js`, and documented secret rotation and TLS certificate renewal in `docs/nat_traversal_strategy.md`.
+
 **Work:**
 
 * Configure external IP, relay port range, quotas, realm, certificates, and allowed protocols.
