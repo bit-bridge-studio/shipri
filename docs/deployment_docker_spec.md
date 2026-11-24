@@ -289,16 +289,26 @@ services:
     restart: unless-stopped
     environment:
       - CADDY_SITE_ADDRESS=${CADDY_SITE_ADDRESS:-poc.shipri.app}
+      - SHIPRI_ENV_HEADER=${SHIPRI_ENV_HEADER:-poc-staging}
+      - SHIPRI_ROBOTS_HEADER=${SHIPRI_ROBOTS_HEADER:-noindex, nofollow}
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - client
-      - server
+      client:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   client:
     build:
@@ -311,7 +321,14 @@ services:
     expose:
       - "80"
     depends_on:
-      - server
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   server:
     build:
@@ -323,12 +340,27 @@ services:
       - PORT=${PORT:-5001}
       - NODE_ENV=${NODE_ENV:-production}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://poc.shipri.app,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      - REQUIRE_ROOM_AUTH=${REQUIRE_ROOM_AUTH:-true}
+      - MAX_ROOMS=${MAX_ROOMS:-5000}
+      - ROOM_IDLE_TTL_MS=${ROOM_IDLE_TTL_MS:-1800000}
+      - ROOM_MAX_LIFETIME_MS=${ROOM_MAX_LIFETIME_MS:-14400000}
+      - ROOM_CLEANUP_INTERVAL_MS=${ROOM_CLEANUP_INTERVAL_MS:-60000}
+      - ROOM_CREATE_RATE_LIMIT_MAX=${ROOM_CREATE_RATE_LIMIT_MAX:-10}
+      - ROOM_CREATE_RATE_LIMIT_WINDOW_MS=${ROOM_CREATE_RATE_LIMIT_WINDOW_MS:-60000}
       - STUN_URLS=${STUN_URLS:-stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302}
-      # Full-backend runtime variables (Section 6) inject REQUIRE_ROOM_AUTH, TRUST_PROXY,
-      # MAX_ROOMS, TTL/rate limits, TURN_URLS, TURN_SHARED_SECRET, TURN_CREDENTIAL_TTL_SECONDS,
-      # and REQUIRE_TURN via uncommitted deployment environment configuration without committed secrets.
+      - TURN_URLS=${TURN_URLS:-}
+      - TURN_CREDENTIAL_TTL_SECONDS=${TURN_CREDENTIAL_TTL_SECONDS:-7200}
+      - REQUIRE_TURN=${REQUIRE_TURN:-false}
+      - TURN_SHARED_SECRET=${TURN_SHARED_SECRET:-}
     expose:
       - "5001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 5001) + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   coturn:
     image: coturn/coturn:4.6-alpine
@@ -336,11 +368,13 @@ services:
     restart: unless-stopped
     profiles:
       - turn
-    network_mode: "host" # Host mode is critical for dynamic port allocations in WebRTC
+    network_mode: "host"
+    command:
+      - "-c"
+      - "/etc/coturn/turnserver.conf"
+      - "--static-auth-secret=${TURN_SHARED_SECRET:-}"
     volumes:
-      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf
-    # Note: Coturn uses port 3478 (UDP/TCP) and optionally turn.shipri.app:443 (TCP/TLS).
-    # Do not bind Coturn and Caddy to the same public IP:443.
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
 
 volumes:
   caddy_data:
@@ -352,13 +386,13 @@ volumes:
 ## 4. Container-Specific Dockerfiles
 
 ### 4.1. Client Dockerfile (`client/Dockerfile`)
-Uses a multi-stage build to keep production image size under 30MB.
+Uses a multi-stage build anchored on `package-lock.json` to keep production image size under 30MB.
 
 ```dockerfile
 # Stage 1: Build
 FROM node:20-alpine AS build
 WORKDIR /app
-COPY package*.json ./
+COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 ARG VITE_SIGNALING_URL=https://poc.shipri.app
@@ -374,12 +408,15 @@ CMD ["nginx", "-g", "daemon off;"]
 ```
 
 ### 4.2. Server Dockerfile (`server/Dockerfile`)
+Uses `package-lock.json`, `npm ci --omit=dev`, and non-root `USER node` execution:
+
 ```dockerfile
 FROM node:20-alpine
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY src ./src
+USER node
 EXPOSE 5001
 CMD ["node", "src/index.js"]
 ```
@@ -388,13 +425,13 @@ CMD ["node", "src/index.js"]
 
 ## 5. Reverse Proxy Setup (`Caddyfile`)
 
-Caddy handles TLS termination automatically for the web app, `/health`, and Socket.IO endpoint in standalone deployments. `Caddyfile` defaults `CADDY_SITE_ADDRESS` to `poc.shipri.app` with staging headers (set `CADDY_SITE_ADDRESS=shipri.app` in production full-backend deployments; external `nginx-proxy` deployments rely on the host proxy and `client/nginx.conf` for `/health` and `/socket.io/` proxying):
+Caddy handles TLS termination automatically for the web app, `/health`, and Socket.IO endpoint in standalone deployments. `Caddyfile` defaults `CADDY_SITE_ADDRESS` to `poc.shipri.app` with staging headers and parameterizes `SHIPRI_ENV_HEADER` and `SHIPRI_ROBOTS_HEADER` for production overrides (`CADDY_SITE_ADDRESS=shipri.app`, `SHIPRI_ENV_HEADER=production`, `SHIPRI_ROBOTS_HEADER=index, follow`); external `nginx-proxy` deployments rely on the host proxy and `client/nginx.conf` for `/health` and `/socket.io/` proxying:
 
 ```caddy
 {$CADDY_SITE_ADDRESS:poc.shipri.app} {
     header {
-        X-Shipri-Environment "poc-staging"
-        X-Robots-Tag "noindex, nofollow"
+        X-Shipri-Environment "{$SHIPRI_ENV_HEADER:poc-staging}"
+        X-Robots-Tag "{$SHIPRI_ROBOTS_HEADER:noindex, nofollow}"
     }
 
     # 1. Route Socket.IO HTTP polling and WSS WebSocket traffic
