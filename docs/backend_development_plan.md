@@ -96,6 +96,8 @@ Full backend development begins only after:
 
 ### BE-3: Implement Abuse Controls and Safe Logging
 
+**Status:** Completed (`2026-11-24`) - implemented `TRUST_PROXY`-aware IP extraction and per-IP `room:create` rate limiting (`server/src/rate-limit.js`), `MAX_ROOMS` capacity enforcement (`SERVER_BUSY`), privacy-safe operational logging omitting `socket.id`, client IPs, tokens, secrets, and SDP (`server/src/logger.js`), and integration tests (`server/test/abuse-controls.test.js`).
+
 **Work:**
 
 * Add room-creation rate limits and maximum active room count.
