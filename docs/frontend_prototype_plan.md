@@ -342,6 +342,8 @@ All modules and controls under `client/src/prototype/` (`webrtc-harness.js`, `di
 
 ### FP-6: Prototype Acceptance Gate
 
+**Status:** Completed (`2026-11-24`) - verified full-backend authorized lifecycle, third-peer rejection, unauthorized signaling isolation, rate-limit/capacity handling, room TTL expiry and cleanup, direct (`all`) and forced-TURN (`relay`) diagnostics, prototype-only module inventory (`client/src/prototype/prototype-manifest.js`), and live local full-backend Socket.IO integration; evidence recorded in Section `9` below.
+
 **Dependency:** full backend stages `BE-2` through `BE-6`.
 
 **Work:**
@@ -427,3 +429,42 @@ Recorded on `2026-11-23` after completing prototype foundation implementation (`
    * Open two browser tabs at `http://localhost:5173` to exercise room creation, joining, third-tab `ROOM_FULL`, `Validation & Error Scenarios`, STUN-only `ice:get`, WebRTC negotiation, `"shipri-diagnostic"` bidirectional `ping`/`pong`/`text`, and leave/disconnect recovery.
 2. **Staging Deployment and Post-DNS Verification**:
    * Follow `deployment_docker_spec.md` Subsections `1.6` and `1.7` on the staging host (`docker compose -f docker-compose.prod.yml up -d --build` for Topology A or `docker compose -f docker-compose.yml up -d --build` for Topology B), then run `npm --prefix server run smoke:staging` and the two-network browser verification checklist once `dig +short A poc.shipri.app` resolves to the staging VPS.
+
+---
+
+## 9. Full Backend Prototype Acceptance Evidence & Module Inventory (`FP-6`)
+
+Recorded on `2026-11-24` after completing prototype expansion (`FP-5` and `FP-6`) against the full backend (`BE-0` through `BE-6`):
+
+### 9.1. Automated Test and Build Evidence
+
+* **Frontend prototype test suite (`npm --prefix client test`)**: `14` test files passed, `87` tests passed (`0` failed, `0` skipped).
+  * `client/test/prototype-backend-acceptance.test.js` (`3` integrated `FP-6` acceptance tests): verifies HKDF `shipri-room-auth-v1` `authVerifier` / `authToken` creation and join, missing/invalid `authToken` rejection (`INVALID_PAYLOAD` and `UNAUTHORIZED` before `ROOM_FULL`), third-peer `ROOM_FULL`, non-member `signal:forward` / `ice:get` / `room:leave` `UNAUTHORIZED` isolation with zero spoofed signals, malformed validation scenarios, `RATE_LIMITED` and `SERVER_BUSY` handling via `FULL_BACKEND_ERROR_DESCRIPTORS`, creator/joiner `room:leave` and unexpected `disconnect` promotion + replacement join + TTL expiry (`ROOM_NOT_FOUND`), direct (`iceTransportPolicy: "all"`) and forced-TURN (`iceTransportPolicy: "relay"`) bidirectional `"shipri-diagnostic"` ping/pong and short text exchanges, fail-closed TURN unavailability (`SERVER_BUSY`), prototype-only auth UI controls in `client/src/App.jsx`, zero leaked secrets/tokens/credentials/IPs across UI markup and sanitized logs, and disk-to-manifest completeness of `PROTOTYPE_ONLY_MODULES`.
+* **Frontend production build (`npm --prefix client run build`)**: passed (`vite v5.4.21`, `67` modules transformed, clean bundle output).
+* **Full backend suite (`npm --prefix server test`)**: `18` test files passed, `245` tests passed (`0` failed, `0` skipped).
+
+### 9.2. Local Live Full-Backend Integration Evidence
+
+* Started a live in-process full-backend `createSignalingServer` instance with `REQUIRE_ROOM_AUTH=true`, `REQUIRE_TURN=true`, `STUN_URLS`, `TURN_URLS`, and `TURN_SHARED_SECRET`, and connected three real `createSignalingClient` (`socket.io-client`) instances from `client/src/signaling/socket-client.js` using `generatePrototypeRoomAuth()` and `validateIceCredentialsPayload(..., { allowTurn: true })`:
+  * Verified authorized room creation (`roomId: "ship-70e1"`), wrong-token join rejection (`UNAUTHORIZED`), valid second-peer join (`negotiationDuty: "answerer"` + `peer:joined`), third-peer rejection (`ROOM_FULL`), non-member `signal:forward` rejection (`UNAUTHORIZED`), STUN+TURN `ice:credentials` validation (`serverEntryCount: 2`, `endpointCount: 3`, `schemes: ["stun", "turn", "turns"]`, `stunCount: 1`, `turnCount: 2`, `endpointsRedacted: true`), live `signal:forward` -> `signal:receive` relay, `room:leave` (`peer:left` `reason: "leave"`), empty-room cleanup (`GET /health` `{ status: "ok", roomsCount: 0 }`), privacy-safe server stdout (room IDs and error codes only), and zero leaked `authToken` or `TURN_SHARED_SECRET` entries in client event logs (`leakedSecret: false`).
+
+### 9.3. Staging Evidence and Pre-DNS Boundary
+
+* **Configuration and Build Validation**: `docker compose -f docker-compose.yml config -q`, `docker compose -f docker-compose.yml --profile turn config -q`, and `docker compose -f docker-compose.prod.yml config -q` exit `0`, and `VITE_SIGNALING_URL=https://poc.shipri.app npm --prefix client run build` builds cleanly.
+* **Live Public Staging Boundary**: Public DNS `A`-record assignment for `poc.shipri.app` remains pending outside this repository (`dig +short A poc.shipri.app` returns empty output and `npm --prefix server run smoke:staging` fails with `fetch failed`). Remote HTTPS/WSS and two-network forced-TURN staging checks against `https://poc.shipri.app` remain to be executed on the host once DNS and `coturn` deployment are live per `deployment_docker_spec.md` and `nat_traversal_strategy.md`.
+
+### 9.4. Prototype-Only vs. Reusable Module Inventory (Part 4 Handoff)
+
+Registered programmatically in `client/src/prototype/prototype-manifest.js` and enforced by `client/test/prototype-backend-acceptance.test.js`:
+
+| Module Path | Classification | Part 4 Disposition | Purpose |
+| :--- | :--- | :--- | :--- |
+| `client/src/App.jsx` | Prototype-only shell | Replace in Part 4 | Diagnostic prototype shell UI and manual test controls |
+| `client/src/prototype/diagnostic-channel.js` | Prototype-only | Remove in Part 4 | Plaintext `"shipri-diagnostic"` ping/pong and short text controller |
+| `client/src/prototype/diagnostic-state.js` | Prototype-only | Remove in Part 4 | Diagnostic reducer state and sanitized event-log binder |
+| `client/src/prototype/ice-diagnostics.js` | Prototype-only | Remove or supersede in Part 4 | Diagnostic ICE summary validator and panel state helper |
+| `client/src/prototype/prototype-manifest.js` | Prototype-only | Remove in Part 4 | Prototype module inventory and full-backend acceptance descriptor registry |
+| `client/src/prototype/room-auth.js` | Prototype-only | Replace in Part 4 | Ephemeral HKDF-SHA256 room-auth helper superseded by Part 4 E2EE key manager |
+| `client/src/prototype/room-errors.js` | Prototype-only | Remove or supersede in Part 4 | Diagnostic error descriptor table and malformed-input presets |
+| `client/src/prototype/webrtc-harness.js` | Prototype-only | Replace in Part 4 | Prototype single-channel WebRTC harness with forced-TURN selector |
+| `client/src/signaling/socket-client.js` | Reusable transport | Keep and isolate in Part 4 | Isolated Socket.IO signaling wrapper with URL validation and log sanitization |
