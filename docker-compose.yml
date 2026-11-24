@@ -88,9 +88,14 @@ services:
     command:
       - "-c"
       - "/etc/coturn/turnserver.conf"
+      - "--listening-ip=${TURN_LISTENING_IP:-0.0.0.0}"
+      - "--external-ip=${TURN_EXTERNAL_IP:-}"
+      - "--cert=${TURN_TLS_CERT_PATH:-/etc/coturn/certs/fullchain.pem}"
+      - "--pkey=${TURN_TLS_KEY_PATH:-/etc/coturn/certs/privkey.pem}"
       - "--static-auth-secret=${TURN_SHARED_SECRET:-}"
     volumes:
       - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ${TURN_CERTS_DIR:-./coturn/certs}:/etc/coturn/certs:ro
 
 volumes:
   caddy_data:
