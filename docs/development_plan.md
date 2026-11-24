@@ -83,7 +83,7 @@ The prototype first implements room creation/joining, Socket.IO event inspection
 
 The backend implements room authorization, lifecycle, validation, abuse controls, TURN credentials, safe configuration, Docker/Caddy/Coturn deployment, and production readiness.
 
-**Gate:** backend integration tests pass, the prototype validates the full signaling contract, and direct plus forced-TURN connections work.
+**Gate:** backend integration tests pass, the prototype validates the full signaling contract, and direct plus forced-TURN connections work. (Completed on `2026-11-24` through `BE-0` - `BE-7` and `FP-5` - `FP-6`; full-backend contracts are frozen in `backend_development_plan.md` Section `4`, `security_audit_open_source.md` Section `5`, and `frontend_prototype_plan.md` Section `9`. Live public-network staging verification over `https://poc.shipri.app` and `turn.shipri.app` remains pending external DNS assignment.)
 
 ### Part 4: Final Frontend Development
 
@@ -120,4 +120,4 @@ Each implementation stage follows TDD:
 4. Run stage-specific checks.
 5. Update documentation when behavior or limitations change.
 
-Part 2 frontend prototype foundation (`FP-0` through `FP-G1`) test, build, local live-server verification, and prototype limitations are recorded in `frontend_prototype_plan.md` Section `8`. Once external DNS `A`-record assignment for `poc.shipri.app` allows `npm --prefix server run smoke:staging` and two-network browser checks to close the live staging gate, Part 3 (`backend_development_plan.md` stage `BE-0`) is the next stage.
+Part 2 frontend prototype foundation (`FP-0` through `FP-G1`) and Part 3 full backend plus prototype expansion (`BE-0` through `BE-7`, `FP-5` through `FP-6`) are verified and recorded in `frontend_prototype_plan.md` Sections `8` and `9` and `backend_development_plan.md` Section `4`. Full-backend Socket.IO, room authorization, ICE/TURN, operational readiness/metrics, and deployment contracts are frozen for Part 4 (`frontend_development_plan.md`). External public DNS assignment for `poc.shipri.app` / `turn.shipri.app` remains the only external prerequisite for live public-network staging smoke checks.
