@@ -32,6 +32,8 @@ const REDACTED_KEY_NAMES = new Set([
   'secret',
   'token',
   'authtoken',
+  'authverifier',
+  'authverifierhash',
   'roomtoken',
   'accesstoken',
   'refreshtoken',
