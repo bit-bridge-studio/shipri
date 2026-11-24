@@ -89,7 +89,8 @@ The signaling server handles active WebSocket rooms in memory. In a public, open
 * **Risk**: Permissive CORS (`*`) lets arbitrary origins connect to signaling endpoints, while verbose operational logs can leak `socket.id` tracking correlations, client IP addresses, `authToken`, `TURN_SHARED_SECRET`, SDP payloads, or ICE candidates.
 * **Mitigation**:
   * **Strict `ALLOWED_ORIGINS` Enforcement**: Both Express HTTP CORS and Socket.IO CORS enforce canonical `http://` or `https://` origins from `ALLOWED_ORIGINS`. Wildcards (`*`), paths, query strings, fragments, and embedded credentials fail startup validation.
-  * **Zero-Secret & Zero-Payload Logging**: Production logs record minimal operational lifecycle events (`roomId`, error `code`, startup/shutdown status) only. Never log unnecessary `socket.id` identifiers in production logs, raw client IP addresses, `authToken`, `authVerifier`, `authVerifierHash`, `TURN_SHARED_SECRET`, TURN `username` or `credential`, SDP bodies, ICE candidates, `#key=` fragments, E2EE keys, file metadata, board state, file requests, or file contents.
+  * **Zero-Secret & Zero-Payload Logging**: Production logs (implemented in `server/src/logger.js`) record minimal operational lifecycle events (`roomId`, error `code`, startup/shutdown status) only. Never log unnecessary `socket.id` identifiers in production logs, raw client IP addresses, `authToken`, `authVerifier`, `authVerifierHash`, `TURN_SHARED_SECRET`, TURN `username` or `credential`, SDP bodies, ICE candidates, `#key=` fragments, E2EE keys, file metadata, board state, file requests, or file contents.
+  * **Transport Frame Bounds**: Socket.IO configures `maxHttpBufferSize = 65536` bytes (`SIGNAL_DATA_MAX_BYTES`) so oversized signaling payloads are dropped at the transport boundary without inspecting or mutating opaque `signalData`.
 
 ---
 
