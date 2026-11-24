@@ -1,8 +1,10 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   DEFAULT_TURN_CREDENTIAL_TTL_SECONDS,
   resolveDevelopmentIceServers,
 } from './config.js';
+
+const TURN_USERNAME_PATTERN = /^(\d+):([A-Za-z0-9_-]{1,64})$/;
 
 /**
  * Generates Coturn REST API time-limited HMAC-SHA1 credentials compatible with use-auth-secret.
@@ -36,6 +38,48 @@ export function generateTurnCredentials({
     credential,
     expiresAt,
   };
+}
+
+/**
+ * Verifies a Coturn REST HMAC-SHA1 credential and enforces timestamp expiry in constant time.
+ */
+export function verifyTurnCredential({
+  username,
+  credential,
+  turnSharedSecret,
+  now = () => Date.now(),
+}) {
+  if (
+    typeof username !== 'string' ||
+    typeof credential !== 'string' ||
+    typeof turnSharedSecret !== 'string' ||
+    turnSharedSecret.trim().length === 0
+  ) {
+    return false;
+  }
+
+  const match = TURN_USERNAME_PATTERN.exec(username);
+  if (!match) {
+    return false;
+  }
+
+  const expiresAt = Number.parseInt(match[1], 10);
+  const currentEpoch = Math.floor(now() / 1000);
+  if (!Number.isSafeInteger(expiresAt) || currentEpoch >= expiresAt) {
+    return false;
+  }
+
+  const expected = createHmac('sha1', turnSharedSecret)
+    .update(username)
+    .digest('base64');
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  const actualBuf = Buffer.from(credential, 'utf8');
+
+  if (expectedBuf.length !== actualBuf.length) {
+    return false;
+  }
+
+  return timingSafeEqual(expectedBuf, actualBuf);
 }
 
 /**

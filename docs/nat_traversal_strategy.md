@@ -130,32 +130,43 @@ Full backend server response (`ice:credentials`):
 
 ---
 
-## 4. Coturn Configuration File Setup (`turnserver.conf`)
+## 4. Hardened Coturn Configuration (`coturn/turnserver.conf`)
 
-Below is the production-ready configuration blueprint for our Coturn instance:
+The production Coturn blueprint in `coturn/turnserver.conf` omits all secrets and host-specific IPs (injected at runtime via `docker-compose.yml --profile turn`), enforces explicit relay port bounds (`49152-65535`), blocks internal/loopback peer targets (`denied-peer-ip`, `no-loopback-peers`, `no-multicast-peers`, `no-cli`), and disables legacy TLS protocols:
 
 ```ini
-# Listening Ports
+# Listening Ports (3478 UDP/TCP standard STUN/TURN; 443 TCP/TLS on dedicated turn.shipri.app IP)
 listening-port=3478
 tls-listening-port=443
 
-# Network bindings
-listening-ip=0.0.0.0
-external-ip=YOUR_SERVER_PUBLIC_IP
+# Dynamic Relay Port Range
+min-port=49152
+max-port=65535
 
-# Cryptography & Certificates (required for TLS/TURNS on turn.shipri.app:443)
-cert=/etc/letsencrypt/live/turn.shipri.app/fullchain.pem
-pkey=/etc/letsencrypt/live/turn.shipri.app/privkey.pem
-
-# Security & Authentication
-fingerprint
-lt-cred-mech
+# Time-Limited REST API Authentication (secret injected via runtime --static-auth-secret)
 use-auth-secret
-static-auth-secret=YOUR_STRONG_SHARED_SECRET
+lt-cred-mech
 realm=turn.shipri.app
+fingerprint
+stale-nonce=600
 
-# Performance Optimizations
-# Disable legacy protocols to reduce attack surface
+# Security Hardening: Disable Admin CLI, Loopback/Multicast, and Internal SSRF Targets
+no-cli
+no-multicast-peers
+no-loopback-peers
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.0.0.0-192.0.0.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=::1
+denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+
+# Modern TLS Only
 no-sslv3
 no-tlsv1
 no-tlsv1_1
@@ -166,7 +177,7 @@ user-quota=2
 syslog
 ```
 
-`total-quota` and `user-quota` must be sized for the deployment budget. Avoid unlimited quotas on public deployments unless there is an external bandwidth limiter.
+`total-quota` and `user-quota` must be sized for the deployment budget. Avoid unlimited quotas on public deployments unless there is an external bandwidth limiter. `TURN_LISTENING_IP`, `TURN_EXTERNAL_IP`, `TURN_TLS_CERT_PATH`, `TURN_TLS_KEY_PATH`, and `TURN_SHARED_SECRET` are supplied exclusively via host environment configuration so `turn.shipri.app:443` never collides with Caddy on `shipri.app:443`.
 
 ---
 
@@ -185,3 +196,28 @@ syslog
    ```
 6. **Bandwidth Warning**: If the selected ICE candidate is a `relay` candidate, notify the user in the UI: *"Direct P2P connection could not be established. Relaying via secure server (speed may be reduced)."*
 7. **Prototype Transport Policy and Candidate-Pair Diagnostics (`FP-5`)**: The Part 3 frontend prototype adds selectable `iceTransportPolicy` modes (`"all"` for direct-preferred and `"relay"` for forced-TURN verification), summarizes gathered candidate types (`host`, `srflx`, `relay`), inspects `RTCPeerConnection.getStats()` to report whether the selected active candidate pair is `direct` or `relay`, displays the bandwidth notice above when relayed, and surfaces `SERVER_BUSY` or ICE/TURN connectivity errors cleanly without ever logging `TURN_SHARED_SECRET`, raw TURN credentials, or raw candidate IP details.
+
+---
+
+## 6. Operational Procedures: Secret Rotation and TLS Certificate Renewal
+
+### 6.1. Endpoint Isolation (`shipri.app:443` vs `turn.shipri.app:443`)
+
+* Bind Caddy (`shipri-proxy`) exclusively to the web host IP for `shipri.app:443` (HTTPS/WSS).
+* Bind Coturn (`shipri-turn`) via `TURN_LISTENING_IP` and `TURN_EXTERNAL_IP` on a separate public IP for `turn.shipri.app:443` (TURNS TCP/TLS) plus `3478` (UDP/TCP) and relay range `49152-65535/udp`.
+* Before starting `--profile turn`, confirm no listener already occupies `${TURN_LISTENING_IP}:443` or `:3478` (`ss -tulpn | grep -E ':(443|3478)\s'`).
+
+### 6.2. Shared Secret Rotation (`TURN_SHARED_SECRET`)
+
+1. Generate a new 256-bit high-entropy secret on the deployment host without printing it to shared logs (`openssl rand -base64 32`).
+2. Update `TURN_SHARED_SECRET` in the host's uncommitted `.env` / secret manager.
+3. For zero-disruption cutover during active sessions, Coturn supports supplying multiple `--static-auth-secret` values temporarily during the overlap window (`TURN_CREDENTIAL_TTL_SECONDS`, default 2 hours): add the new secret to Coturn first, restart `shipri-server` so new `ice:get` responses sign with the new secret, wait for `TURN_CREDENTIAL_TTL_SECONDS` to elapse so old credentials expire naturally, and then remove the previous secret from Coturn.
+4. For immediate emergency revocation, rotate `TURN_SHARED_SECRET` and recreate both `shipri-turn` and `shipri-server` together (`docker compose --profile turn up -d --force-recreate coturn server`). Existing credentials signed with the revoked secret fail immediately.
+5. Verify forced-relay connectivity via the prototype (`iceTransportPolicy: "relay"`) and confirm expired/old credentials are rejected.
+
+### 6.3. TLS Certificate Renewal (`turn.shipri.app`)
+
+1. Renew TLS certificates for `turn.shipri.app` via Certbot (`DNS-01` challenge recommended when port `80` is owned by Caddy on another endpoint, or dedicated HTTP-01 on the TURN IP).
+2. Copy or symlink renewed `fullchain.pem` and `privkey.pem` into `${TURN_CERTS_DIR}` (mounted read-only at `/etc/coturn/certs:ro` inside `shipri-turn`) with owner-only private key permissions (`chmod 600`).
+3. Reload or restart `shipri-turn` (`docker compose --profile turn restart coturn`) via a Certbot `--deploy-hook` so Coturn loads the renewed certificate chain without dropping `shipri-server` rooms.
+4. Confirm TLS 1.2+ handshake on `turn.shipri.app:443` and verify a forced `iceTransportPolicy: "relay"` prototype session succeeds.
