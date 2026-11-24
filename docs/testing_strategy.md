@@ -182,9 +182,11 @@ During development and CI, we must prove that the TURN server is functional and 
 
 ---
 
-## 5. Prototype NAT & Forced-TURN Diagnostic Coverage (`FP-5`)
+## 5. Prototype NAT & Forced-TURN Diagnostic Coverage (`FP-5` and `FP-6`)
 
 * **Unit & Harness Verification (`client/test/nat-turn-diagnostics.test.js`)**:
   * Exercises selectable `iceTransportPolicy` modes (`"all"` and `"relay"`) across both `offerer` and `answerer` peer connections.
   * Verifies `extractCandidateType` (`host`, `srflx`, `prflx`, `relay`) and `inspectSelectedPathFromStats` (`direct` vs `relay`, `RELAY_BANDWIDTH_WARNING`) never store, display, or log IP addresses, ports, TURN `username`/`credential` strings, or `TURN_SHARED_SECRET`.
   * Confirms bidirectional `"shipri-diagnostic"` `ping`/`pong` and `text` exchanges succeed in both direct (`"all"`) and forced-TURN (`"relay"`) modes.
+* **Prototype Full-Backend Acceptance Suite (`client/test/prototype-backend-acceptance.test.js`)**:
+  * Verifies HKDF `shipri-room-auth-v1` room authorization (`authVerifier` / `authToken`), unauthorized join and third-peer `ROOM_FULL` precedence, non-member signaling/ICE/leave isolation, `RATE_LIMITED` and `SERVER_BUSY` handling, leave/disconnect replacement and TTL expiry cleanup, direct and forced-TURN bidirectional diagnostic exchanges, zero secret leakage, and disk-to-manifest completeness of `PROTOTYPE_ONLY_MODULES`.
