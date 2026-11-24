@@ -113,6 +113,8 @@ Full backend development begins only after:
 
 ### BE-4: Implement ICE and TURN Credential Service
 
+**Status:** Completed (`2026-11-24`) - implemented `server/src/ice-service.js` with environment-driven STUN plus Coturn REST HMAC-SHA1 ephemeral TURN credentials, fail-closed `SERVER_BUSY` handling for missing/invalid TURN configuration, secret-free `config` and logs, and prototype STUN+TURN validation (`client/src/prototype/ice-diagnostics.js`).
+
 **Work:**
 
 * Implement `ice:get` for authorized room members.
