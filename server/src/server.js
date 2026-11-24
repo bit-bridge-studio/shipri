@@ -2,7 +2,8 @@ import { createServer } from 'node:http';
 import cors from 'cors';
 import express from 'express';
 import { Server } from 'socket.io';
-import { resolveDevelopmentIceServers, resolveServerConfig } from './config.js';
+import { getTurnSharedSecret, resolveServerConfig } from './config.js';
+import { resolveIceServers } from './ice-service.js';
 import { createSafeLogger } from './logger.js';
 import { createRoomCreateRateLimiter, resolveClientIp } from './rate-limit.js';
 import { verifyAuthToken } from './room-auth.js';
@@ -470,14 +471,20 @@ export function createSignalingServer(options = {}) {
         return;
       }
 
-      // Development-only STUN response; dynamic TURN credentials are added in BE-4.
-      const iceConfig = resolveDevelopmentIceServers(config.stunUrls);
+      const iceConfig = resolveIceServers({
+        stunUrls: config.stunUrls,
+        turnUrls: config.turnUrls,
+        turnSharedSecret: getTurnSharedSecret(config),
+        turnCredentialTtlSeconds: config.turnCredentialTtlSeconds,
+        requireTurn: config.requireTurn,
+        now,
+      });
       if (!iceConfig.ok) {
         emitRoomError(
           socket,
           createRoomError(
             'SERVER_BUSY',
-            'Development ICE configuration is unavailable.',
+            'ICE configuration is unavailable.',
             roomId,
           ),
         );
