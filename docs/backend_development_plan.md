@@ -130,6 +130,8 @@ Full backend development begins only after:
 
 ### BE-5: Make Runtime and Docker Deployment Reproducible
 
+**Status:** Completed (`2026-11-24`) - removed placeholder secrets from `coturn/turnserver.conf` in favor of runtime env substitution, added container `healthcheck` and `service_healthy` dependencies across `docker-compose.yml` and `docker-compose.prod.yml`, locked `server/Dockerfile` (`npm ci --omit=dev`, `USER node`) and `client/Dockerfile` onto `package-lock.json`, parameterized `Caddyfile`, updated `server/.env.example`, and added `server/test/deployment-config.test.js`.
+
 **Work:**
 
 * Remove committed placeholder secrets from Compose and Coturn configuration.
