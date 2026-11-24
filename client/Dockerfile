@@ -1,7 +1,7 @@
 # Stage 1: Build
 FROM node:20-alpine AS build
 WORKDIR /app
-COPY package*.json ./
+COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 ARG VITE_SIGNALING_URL=https://poc.shipri.app
