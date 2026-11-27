@@ -35,3 +35,9 @@ Thumbs.db
 *.sln
 *.sw?
 .codex/
+
+# Playwright E2E artifacts
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
