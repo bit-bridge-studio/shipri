@@ -1,9 +1,4 @@
-const UNSUPPORTED_GUIDANCE = Object.freeze({
-  INSECURE_CONTEXT:
-    'Direct file saving requires a secure HTTPS context (or localhost) with the File System Access API.',
-  MISSING_FILE_SYSTEM_ACCESS_API:
-    'This browser does not support window.showSaveFilePicker() for direct-to-disk streaming.',
-});
+import { detectBrowserPersistenceProfile } from './capability-limits.js';
 
 function sanitizeSuggestedFileName(fileName) {
   if (typeof fileName !== 'string' || fileName.trim() === '') {
@@ -18,33 +13,9 @@ function sanitizeSuggestedFileName(fileName) {
  */
 export function evaluatePersistenceCapability({
   windowObj = globalThis.window,
+  navigatorObj = globalThis.navigator,
 } = {}) {
-  const isSecureContext = Boolean(windowObj?.isSecureContext);
-  if (!isSecureContext) {
-    return Object.freeze({
-      supported: false,
-      mode: 'unsupported',
-      reason: 'INSECURE_CONTEXT',
-      guidance: UNSUPPORTED_GUIDANCE.INSECURE_CONTEXT,
-    });
-  }
-
-  const hasSaveFilePicker = typeof windowObj?.showSaveFilePicker === 'function';
-  if (!hasSaveFilePicker) {
-    return Object.freeze({
-      supported: false,
-      mode: 'unsupported',
-      reason: 'MISSING_FILE_SYSTEM_ACCESS_API',
-      guidance: UNSUPPORTED_GUIDANCE.MISSING_FILE_SYSTEM_ACCESS_API,
-    });
-  }
-
-  return Object.freeze({
-    supported: true,
-    mode: 'file-system-access',
-    reason: null,
-    guidance: null,
-  });
+  return detectBrowserPersistenceProfile({ windowObj, navigatorObj });
 }
 
 /**
