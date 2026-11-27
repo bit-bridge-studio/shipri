@@ -386,7 +386,7 @@ volumes:
 ## 4. Container-Specific Dockerfiles
 
 ### 4.1. Client Dockerfile (`client/Dockerfile`)
-Uses a multi-stage build anchored on `package-lock.json` to keep production image size under 30MB.
+Uses a multi-stage build anchored on `package-lock.json` to keep production image size under 30MB and renders `client/nginx.conf` via Nginx `envsubst` templates (`NGINX_ENVSUBST_FILTER=^SHIPRI_`) so `SHIPRI_ENV_HEADER` and `SHIPRI_ROBOTS_HEADER` match `Caddyfile`:
 
 ```dockerfile
 # Stage 1: Build
@@ -401,8 +401,11 @@ RUN npm run build
 
 # Stage 2: Serve
 FROM nginx:1.25-alpine
+ENV SHIPRI_ENV_HEADER=poc-staging
+ENV SHIPRI_ROBOTS_HEADER="noindex, nofollow"
+ENV NGINX_ENVSUBST_FILTER=^SHIPRI_
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/templates/default.conf.template
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 ```
@@ -423,9 +426,9 @@ CMD ["node", "src/index.js"]
 
 ---
 
-## 5. Reverse Proxy Setup (`Caddyfile`)
+## 5. Reverse Proxy Setup (`Caddyfile` and `client/nginx.conf`)
 
-Caddy handles TLS termination automatically for the web app, `/health`, and Socket.IO endpoint in standalone deployments. `Caddyfile` defaults `CADDY_SITE_ADDRESS` to `poc.shipri.app` with staging headers and parameterizes `SHIPRI_ENV_HEADER` and `SHIPRI_ROBOTS_HEADER` for production overrides (`CADDY_SITE_ADDRESS=shipri.app`, `SHIPRI_ENV_HEADER=production`, `SHIPRI_ROBOTS_HEADER=index, follow`); external `nginx-proxy` deployments rely on the host proxy and `client/nginx.conf` for `/health` and `/socket.io/` proxying:
+Caddy handles TLS termination automatically for the web app, `/health`, `/ready`, and Socket.IO endpoint in standalone deployments. `Caddyfile` defaults `CADDY_SITE_ADDRESS` to `poc.shipri.app` with staging headers and parameterizes `SHIPRI_ENV_HEADER` and `SHIPRI_ROBOTS_HEADER` for production overrides (`CADDY_SITE_ADDRESS=shipri.app`, `SHIPRI_ENV_HEADER=production`, `SHIPRI_ROBOTS_HEADER=index, follow`); external `nginx-proxy` deployments (`docker-compose.prod.yml`) use `client/nginx.conf` with matching `SHIPRI_ENV_HEADER` and `SHIPRI_ROBOTS_HEADER` variables, `/health`, `/ready`, `/socket.io/` proxying, and external `404` blocking on `/metrics`:
 
 ```caddy
 {$CADDY_SITE_ADDRESS:poc.shipri.app} {
@@ -437,10 +440,14 @@ Caddy handles TLS termination automatically for the web app, `/health`, and Sock
     # 1. Route Socket.IO HTTP polling and WSS WebSocket traffic
     reverse_proxy /socket.io/* server:5001
 
-    # 2. Route HTTP health checks
+    # 2. Route HTTP liveness and readiness checks
     reverse_proxy /health server:5001
+    reverse_proxy /ready server:5001
 
-    # 3. Route all other requests to the static SPA client
+    # 3. Keep operational metrics internal to the container network
+    respond /metrics 404
+
+    # 4. Route all other requests to the static SPA client
     reverse_proxy * client:80
 }
 ```
@@ -519,8 +526,8 @@ Before running `docker compose up -d` (or `docker compose --profile turn up -d`)
 
 * **Health, Readiness, and Non-Tracking Metrics (`Cache-Control: no-store`)**:
   * `GET /health`: returns `200 OK` `{ status: "ok", roomsCount }` for container liveness probes.
-  * `GET /ready`: returns `200 OK` `{ status: "ready", roomsCount, maxRooms }` when the server is accepting traffic and ICE/TURN configuration validates cleanly (`resolveIceServers().ok === true`); returns `503 Service Unavailable` `{ status: "not_ready" }` during shutdown or when required TURN settings are unavailable.
-  * `GET /metrics`: returns purely aggregate capacity and error-code counters (`status`, `uptimeSeconds`, `activeRoomsCount`, `maxRooms`, `roomsCreatedTotal`, `roomsExpiredTotal`, `errorsByCode`) with zero user tracking, zero room/peer/socket IDs, zero client IPs, and zero secrets. Keep `/metrics` internal to the container network or private operator probes unless explicitly gated at the reverse proxy.
+  * `GET /ready`: returns `200 OK` `{ status: "ready", roomsCount, maxRooms }` when the server is accepting traffic and ICE/TURN configuration validates cleanly (`resolveIceServers().ok === true`); returns `503 Service Unavailable` `{ status: "not_ready" }` during shutdown or when required TURN settings are unavailable. Both `Caddyfile` and `client/nginx.conf` proxy `/ready` directly to `server:5001/ready`.
+  * `GET /metrics`: returns purely aggregate capacity and error-code counters (`status`, `uptimeSeconds`, `activeRoomsCount`, `maxRooms`, `roomsCreatedTotal`, `roomsExpiredTotal`, `errorsByCode`) with zero user tracking, zero room/peer/socket IDs, zero client IPs, and zero secrets. Both `Caddyfile` and `client/nginx.conf` return `404` for external `/metrics` requests while keeping `server:5001/metrics` reachable inside the container network.
 * **Graceful Shutdown**: `server/src/index.js` traps `SIGTERM` and `SIGINT`, logs `Signaling server shutting down (<signal>)`, marks readiness as `not_ready`, stops the room cleanup timer, disconnects active sockets, clears `activeRooms`, `socketRooms`, and `rateLimiter`, and closes the HTTP/Socket.IO server cleanly.
 * **Configuration Validation & Rollback Procedure**:
   1. Validate Compose manifests before rollout:

@@ -10,8 +10,11 @@ RUN npm run build
 
 # Stage 2: Serve
 FROM nginx:1.25-alpine
+ENV SHIPRI_ENV_HEADER=poc-staging
+ENV SHIPRI_ROBOTS_HEADER="noindex, nofollow"
+ENV NGINX_ENVSUBST_FILTER=^SHIPRI_
 COPY --from=build /app/dist /usr/share/nginx/html
-# Custom nginx configuration to support React routing (routing requests to index.html)
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Custom nginx template to route /health, /ready, /socket.io/, and SPA assets
+COPY nginx.conf /etc/nginx/templates/default.conf.template
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
