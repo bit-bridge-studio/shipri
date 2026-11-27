@@ -23,8 +23,9 @@ The joining peer opens the shared link, extracts `#key=...` from the URL fragmen
 The main screen contains:
 
 * room connection state (`waiting_for_peer`, `connected`, `reconnecting`) and direct vs. relayed (`TURN`) indicator with relay bandwidth notice when relayed;
-* copy-link and QR controls (copying the full `#key=` URL on demand without exposing it in the visible address bar);
-* a drag-and-drop dropzone and file picker available to either peer at any time;
+* copy-link and offline browser QR controls (`client/src/ui/qr-code.js`, `client/src/ui/RoomBoardApp.jsx`, `client/src/ui/room-board-controller.js`) copying or encoding the full `#key=` URL locally on demand without exposing it in the visible address bar;
+* room entry controls supporting either canonical `ship-xxxx` room IDs or pasted invite URLs containing `#key=` (`parseRoomEntryInput`);
+* a keyboard-accessible drag-and-drop dropzone (`tabIndex={0}`, `Enter`/`Space`) and file picker available to either peer at any time;
 * cards for local files (`Shared by you`) with `Remove` action;
 * cards for decrypted remote files (`Available from peer`) with `Download` action and pre-evaluated browser capability/limit status;
 * independent transfer progress rows for outgoing and incoming transfers.
