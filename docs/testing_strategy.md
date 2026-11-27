@@ -228,3 +228,14 @@ All Part 4 implementation tickets (`FF-1` through `FF-8`) MUST include unit and/
 4. **Cumulative `FLOW_CREDIT` & Cross-Channel Safety**: verify `FLOW_CREDIT.maxPlaintextOffsetExclusive` limits (`2 MiB` initial/in-flight window, `512 KiB` grant step, `4 MiB` max queued bytes), independent `bufferedAmount` (`1 MiB` high / `256 KiB` low) backpressure, monotonic `sequence` enforcement ignoring duplicate/stale/reordered credits, independent `TRANSFER_PAUSE`/`TRANSFER_RESUME`, safe handling of out-of-order `shipri-control` vs. `shipri-binary` arrivals, and deterministic `DOWNLOAD_REJECTED` (`reason: "BUSY"`) on second same-direction download requests.
 5. **Execution & Worker Boundaries**: verify main-thread `RTCPeerConnection` and tested main-thread `RTCDataChannel` compatibility path, zero-copy transferable `ArrayBuffer` handoffs (`byteLength === 0` after transfer), and generation-scoped disposal rejecting late events from replaced connections.
 6. **Persistence & Backend Exclusion**: verify synchronous `showSaveFilePicker()` invocation preserving user activation, pre-evaluated capability/storage checks, unsupported-browser messaging without sending `DOWNLOAD_REQUEST`, and zero board state, filenames, sizes, requests, keys, or chunks ever emitted over Socket.IO or logged.
+
+---
+
+## 8. Final Frontend Release Gate Evidence (`FF-8`)
+
+* **Compiled Production Bundle Gate (`client/e2e/release-gate.e2e.js`)**:
+  * Verifies the compiled Vite bundle excludes legacy prototype symbols (`Diagnostic Prototype Shell`, `Sender Mode`, `Receiver Mode`) and bundles `chunk-crypto.worker-*.js` cleanly without unresolved `../crypto/` relative imports after switching `client/src/workers/chunk-worker-client.js` to static `new Worker(...)`.
+  * Passes bidirectional shared-board sync and SHA-256 verified file transfers on the compiled bundle in both Direct P2P (`Direct P2P`) and forced-TURN (`iceTransportPolicy: "relay"`, `TURN Relay` badge, verified local TURN relay byte counters) modes.
+  * Verifies accessibility landmarks (`main`, `role="status"`, `aria-live="polite"`, labeled controls), `Enter` keyboard file picking on the dropzone, `Escape` closing `#room-qr-panel` with focus restoration to the QR toggle button (`aria-controls="room-qr-panel"`), and zero horizontal overflow across `1280x800`, `768x1024`, and `375x667` viewports.
+  * Streams a `16 MiB` (`256`-chunk) virtual file through the compiled Dedicated Worker with O(1)-stub digest verification, confirming `throughputMBps > 0.5`, bounded Chromium `JSHeapUsedSize` growth (`< 32 MiB` delta on both peers), pre-request blocking for insufficient storage (`storageQuotaBytes`), and complete `sessionStorage` room-key wipe on `Leave Room`.
+  * Confirms `/health`, `/ready`, `/metrics`, HTTP requests, Socket.IO events, and console/page error collectors observe zero room `#key=` fragments, filenames, file sizes, hashes, or board/transfer protocol messages.
