@@ -284,11 +284,11 @@ Both owner-side transport backpressure and downloader-side cumulative credit are
 
 ## 6. Resume & Cryptographic Epoch Rotation
 
-1. On reconnect (`shipri-control` re-opens after `peer:left` within `RECONNECT_BOARD_GRACE_MS`), peers first exchange `PEER_HELLO` and `BOARD_SYNC` to reconcile remote file availability.
-2. For an eligible `paused_reconnecting` transfer, the downloader sends `RESUME_REQUEST` specifying `transferId`, `fileId`, `direction`, `nextEpoch = previousEpoch + 1`, `lastPersistedChunkIndex`, and `persistedPlaintextBytes`.
-3. The owner verifies the local file still exists with unchanged `fileSize` (and `lastModified` / fingerprint) and that `nextEpoch > previousEpoch`, derives the new HKDF key for `nextEpoch`, and replies with `RESUME_ACCEPTED { epoch: nextEpoch, resumeFromChunkIndex: lastPersistedChunkIndex + 1 }`.
+1. On reconnect (`shipri-control` re-opens after `peer:left` within `RECONNECT_BOARD_GRACE_MS` = `60_000ms`), peers first exchange `PEER_HELLO` and `BOARD_SYNC` to reconcile remote file availability. Automatic ICE/peer recovery is bounded by `client/src/webrtc/reconnect-supervisor.js` (`MAX_RECONNECT_ATTEMPTS = 3`, exponential backoff `1_000ms` to `8_000ms`, overall grace timeout `60_000ms`), while `client/src/webrtc/room-connection.js` disposes prior data channels, timers, and listeners and gates inbound messages by negotiation generation.
+2. For an eligible `paused_reconnecting` transfer, the downloader (`client/src/transfer/transfer-coordinator.js` and `client/src/transfer/downloader-receiver.js`) sends `RESUME_REQUEST` specifying `transferId`, `fileId`, `direction`, `nextEpoch = previousEpoch + 1`, `lastPersistedChunkIndex`, and `persistedPlaintextBytes`.
+3. The owner (`client/src/transfer/transfer-coordinator.js` and `client/src/transfer/owner-streamer.js`) verifies the local file still exists with unchanged `fileSize` (and `lastModified` / fingerprint) and that `nextEpoch > previousEpoch`, derives the new HKDF key for `nextEpoch`, and replies with `RESUME_ACCEPTED { epoch: nextEpoch, resumeFromChunkIndex: lastPersistedChunkIndex + 1 }`. Stale `nextEpoch` or modified local files fail with `RESUME_REJECTED` (`INVALID_EPOCH` without aborting newer epochs, or `FILE_CHANGED` terminal failure).
 4. The downloader rotates its chunk decryption key to `nextEpoch`, resets its `FLOW_CREDIT` `sequence` counter to `1` for the new epoch, and sends a fresh `FLOW_CREDIT` bound to `nextEpoch` anchored at `persistedPlaintextBytes + RECEIVER_INITIAL_CREDIT_WINDOW_BYTES`.
-5. Any leftover binary frame tagged with `epoch < nextEpoch` is dropped safely.
+5. Any leftover binary frame tagged with `epoch < nextEpoch` is dropped safely, while out-of-order or duplicate chunk frames within the active epoch fail closed with `INVALID_FRAME`.
 
 ---
 
