@@ -278,6 +278,7 @@ Both owner-side transport backpressure and downloader-side cumulative credit are
    * `binaryChannel.bufferedAmount < OWNER_CHANNEL_HIGH_WATER_MARK_BYTES`.
 2. **Downloader Monotonicity**: Each `FLOW_CREDIT` binds to `(transferId, fileId, direction, epoch)` and carries a strictly increasing `sequence` (`1, 2, 3, ...`). The owner MUST ignore any `FLOW_CREDIT` whose `transferId`, `fileId`, `direction`, or `epoch` does not match the active transfer, whose `sequence <= lastAcceptedSequence`, or whose `maxPlaintextOffsetExclusive <= currentCreditLimit`. Duplicate, stale, or reordered credit messages NEVER expand the sender window.
 3. **Zero-Byte Files**: For `fileSize === 0` (`totalChunks === 0`), once `DOWNLOAD_ACCEPTED` is received and the empty file handle is opened and closed, the downloader immediately emits `TRANSFER_COMPLETE { totalPersistedBytes: 0 }` with zero binary chunks needed.
+4. **Implementation Modules**: Owner-side bounded chunk slicing and `bufferedAmount` watermark backpressure are implemented in `client/src/transfer/owner-streamer.js`, and downloader-side bounded decrypt/write queueing, `FLOW_CREDIT` issuance, and File System Access API target management are implemented in `client/src/transfer/downloader-receiver.js`.
 
 ---
 
@@ -299,7 +300,7 @@ Both owner-side transport backpressure and downloader-side cumulative credit are
 | Socket.IO signaling (`client/src/signaling/socket-client.js`) | Main Thread | Room auth, membership, ICE retrieval, SDP/trickle ICE relay. |
 | `RTCPeerConnection` & negotiation lifecycle | Main Thread (Required) | Window API ownership, ICE state, selected-path stats, channel creation. |
 | `RTCDataChannel` (`shipri-control`, `shipri-binary`) | Main Thread (Compatibility Baseline) | Tested default transport path; forwards binary `ArrayBuffer`s to/from crypto worker via transfer lists. |
-| Encryption / Decryption & Binary Framing Worker | Dedicated Web Worker | `Blob.slice()`, HKDF/AES-GCM encrypt & decrypt, 52-byte header encode/validate, zero-copy buffer handoff. |
+| Encryption / Decryption & Binary Framing Worker | Dedicated Web Worker (`client/src/workers/chunk-crypto.worker.js`, `chunk-worker-client.js`) | `Blob.slice()`, HKDF/AES-GCM encrypt & decrypt, 52-byte header encode/validate, zero-copy buffer handoff. |
 | File Persistence (`FileSystemWritableFileStream`) | Main Thread (MVP) or Worker where verified | Sequential chunk writes, `close()` on completion, `abort()` on cancel/failure. |
 
 ### 7.2. Transferable `ArrayBuffer` Ownership & Optional Worker `RTCDataChannel`
