@@ -86,7 +86,7 @@ Detect the verified File System Access MVP path, document unsupported browsers, 
 
 ### FF-8: Complete Product UX and Release Gate
 
-**Progress:** Implemented the accessible responsive equal-peer room-board UX (`client/src/ui/RoomBoardApp.jsx`, `client/src/ui/room-board-controller.js`, `client/src/ui/qr-code.js`, mounted by `client/src/main.jsx` with `[55]`). Remaining in `FF-8`: Playwright E2E setup, E2E scenario coverage, and release gate (`[58]`..`[60]`, pending Playwright dependency/script approval).
+**Status:** Completed (`2026-11-27`) - implemented the accessible responsive equal-peer room-board UX (`client/src/ui/RoomBoardApp.jsx`, `client/src/ui/room-board-controller.js`, `client/src/ui/qr-code.js`, mounted by `client/src/main.jsx` with `[55]`), Playwright dual-context peer-room harness (`client/e2e/helpers/` with `[58]`), shared-board, bidirectional transfer, reconnect/resume, forced-TURN, and privacy E2E suites (`client/e2e/shared-board-and-transfers.e2e.js`, `client/e2e/resilience-turn-and-privacy.e2e.js` with `[59]`), static `new Worker(...)` production bundling fix (`client/src/workers/chunk-worker-client.js`), and the compiled-bundle final release gate (`client/e2e/release-gate.e2e.js` with `[60]`).
 
 Deliver accessible responsive room-board UX, Playwright coverage, direct and forced-TURN scenarios, bounded-memory measurements, and security verification.
 
