@@ -82,6 +82,8 @@ Detect the verified File System Access MVP path, document unsupported browsers, 
 
 ### FF-8: Complete Product UX and Release Gate
 
+**Progress:** Implemented the accessible responsive equal-peer room-board UX (`client/src/ui/RoomBoardApp.jsx`, `client/src/ui/room-board-controller.js`, `client/src/ui/qr-code.js`, mounted by `client/src/main.jsx` with `[55]`). Remaining in `FF-6`..`FF-8`: reconnection/resume (`[56]`), capability/limit hardening (`[57]`), and Playwright E2E/release gate (`[58]`..`[60]`).
+
 Deliver accessible responsive room-board UX, Playwright coverage, direct and forced-TURN scenarios, bounded-memory measurements, and security verification.
 
 ---
