@@ -74,6 +74,8 @@ Implement owner-side channel backpressure, downloader-side bounded write queues 
 
 ### FF-6: Implement Reconnection and Safe Resume
 
+**Status:** Completed (`2026-11-27`) - implemented bounded reconnect backoff and grace supervision (`client/src/webrtc/reconnect-supervisor.js`), generation-safe channel and connection disposal on `peer:left` and replacement negotiation (`client/src/webrtc/room-connection.js`), owner and downloader epoch-rotating resume (`client/src/transfer/owner-streamer.js`, `client/src/transfer/downloader-receiver.js`, `client/src/transfer/transfer-coordinator.js`), and controller wiring (`client/src/ui/room-board-controller.js`, `[56]`).
+
 Restore board state, renegotiate WebRTC, authenticate resume state, rotate transfer epochs, and resume from the last fully persisted chunk.
 
 ### FF-7: Define Browser Support and Persistence Limits
