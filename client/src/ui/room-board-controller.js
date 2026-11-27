@@ -262,7 +262,9 @@ export function createRoomBoardController({
   let localBoard = null;
   let remoteBoard = null;
   let transferCoordinator = null;
+  let activeBoardKeyBytes = null;
   let boundRoomId = null;
+  let lastSignalingStatus = signalingClient.getStatus?.().status ?? 'disconnected';
   let autoJoinAttempted = false;
   let qrVisible = false;
   let copyFeedback = null;
@@ -299,6 +301,9 @@ export function createRoomBoardController({
       return 'Signaling connection error. Attempting recovery.';
     }
     if (!connState.roomId) {
+      if (reconnectSupervisor.getState().state === 'reconnecting') {
+        return 'Connection interrupted. Waiting to rejoin room.';
+      }
       return connState.connectionStatus === 'connected'
         ? 'Connected to signaling. Create or join a room to share files.'
         : 'Connecting to signaling server.';
@@ -382,9 +387,12 @@ export function createRoomBoardController({
     const hasActiveIncomingDownload = transfers.some(
       (t) => t.role === 'downloader' && INCOMING_BUSY_STATES.has(t.state),
     );
-    const activeShareUrl = connState.roomId ? resolveShareUrl() : null;
+    const effectiveRoomId =
+      connState.roomId ??
+      (reconnectSupervisor.getState().state === 'reconnecting' ? boundRoomId : null);
+    const activeShareUrl = effectiveRoomId ? resolveShareUrl() : null;
     let qrPayload = null;
-    if (connState.roomId && qrVisible && activeShareUrl) {
+    if (effectiveRoomId && qrVisible && activeShareUrl) {
       try {
         const encoded = encodeQrMatrix(activeShareUrl);
         const quietZone = 4;
@@ -401,11 +409,11 @@ export function createRoomBoardController({
     return {
       connectionStatus: connState.connectionStatus,
       peerState: connState.peerState,
-      roomId: connState.roomId,
+      roomId: effectiveRoomId,
       peerReady: connState.peerReady,
       remoteSyncState: remoteBoard ? remoteBoard.getSyncState() : 'empty',
       hasShareUrl: Boolean(activeShareUrl),
-      qrVisible: Boolean(connState.roomId && qrVisible),
+      qrVisible: Boolean(effectiveRoomId && qrVisible),
       qrPayload,
       copyFeedback,
       selectedPath: connState.selectedPath,
@@ -432,6 +440,10 @@ export function createRoomBoardController({
 
   function teardownBoards() {
     boundRoomId = null;
+    if (activeBoardKeyBytes instanceof Uint8Array) {
+      activeBoardKeyBytes.fill(0);
+      activeBoardKeyBytes = null;
+    }
     if (transferCoordinator) {
       transferCoordinator.dispose();
       transferCoordinator = null;
@@ -457,22 +469,32 @@ export function createRoomBoardController({
       !(masterKeyBytes instanceof Uint8Array) ||
       !isValidMemberId(localMemberId)
     ) {
-      if (!roomId && (localBoard || remoteBoard || transferCoordinator)) {
+      if (masterKeyBytes instanceof Uint8Array) {
+        masterKeyBytes.fill(0);
+      }
+      if (
+        !roomId &&
+        (localBoard || remoteBoard || transferCoordinator) &&
+        reconnectSupervisor.getState().state !== 'reconnecting'
+      ) {
         teardownBoards();
       }
       return;
     }
 
     if (boundRoomId === roomId && localBoard && remoteBoard && transferCoordinator) {
+      masterKeyBytes.fill(0);
       return;
     }
 
     teardownBoards();
     boundRoomId = roomId;
+    activeBoardKeyBytes = new Uint8Array(masterKeyBytes);
+    masterKeyBytes.fill(0);
 
     localBoard = createLocalFileBoard({
       roomId,
-      masterKeyBytes,
+      masterKeyBytes: activeBoardKeyBytes,
       publishControlMessage: async (msg) => {
         if (roomConnection.getState().peerReady) {
           await roomConnection.sendControlMessage(msg);
@@ -485,7 +507,7 @@ export function createRoomBoardController({
 
     remoteBoard = createRemoteFileBoard({
       roomId,
-      masterKeyBytes,
+      masterKeyBytes: activeBoardKeyBytes,
       onChange: (entries) => {
         if (transferCoordinator) {
           void transferCoordinator.refreshRemoteCapabilities(entries);
@@ -500,7 +522,7 @@ export function createRoomBoardController({
 
     transferCoordinator = createTransferCoordinator({
       roomId,
-      masterKeyBytes,
+      masterKeyBytes: activeBoardKeyBytes,
       localMemberId,
       getRemoteMemberId: () => roomConnection.getState().remoteMemberId,
       localBoard,
@@ -533,6 +555,34 @@ export function createRoomBoardController({
     origin,
     iceTransportPolicy,
     onStateChange: (connState) => {
+      const prevStatus = lastSignalingStatus;
+      lastSignalingStatus = connState.connectionStatus;
+      if (
+        boundRoomId &&
+        !connState.roomId &&
+        (connState.connectionStatus === 'disconnected' ||
+          connState.connectionStatus === 'error') &&
+        reconnectSupervisor.getState().state !== 'exhausted'
+      ) {
+        if (reconnectSupervisor.getState().state !== 'reconnecting') {
+          if (remoteBoard) {
+            remoteBoard.handlePeerDisconnected();
+          }
+          if (transferCoordinator) {
+            transferCoordinator.handlePeerDisconnected();
+          }
+          reconnectSupervisor.notifyTransportFailure('SIGNALING_DISCONNECTED');
+        }
+      } else if (
+        boundRoomId &&
+        !connState.roomId &&
+        prevStatus !== 'connected' &&
+        connState.connectionStatus === 'connected' &&
+        reconnectSupervisor.getState().state === 'reconnecting'
+      ) {
+        reconnectSupervisor.triggerReconnectAttempt();
+      }
+
       ensureBoardsInitialized(connState);
       statusAnnouncement = computeStatusAnnouncement(connState);
 
@@ -619,6 +669,9 @@ export function createRoomBoardController({
     signalingClient,
     onStateChange: () => notifyListeners(),
     onExhausted: ({ reason }) => {
+      if (!roomConnection.getState().roomId) {
+        teardownBoards();
+      }
       statusAnnouncement =
         reason === 'GRACE_WINDOW_EXPIRED'
           ? 'Reconnect grace window expired.'
