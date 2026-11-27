@@ -35,7 +35,7 @@ The `offerer` creates two reliable ordered `RTCDataChannel` instances during Web
 | Channel Label | Reliability / Order | Wire Format | Purpose |
 | :--- | :--- | :--- | :--- |
 | `shipri-control` | Reliable, ordered (`ordered: true`) | UTF-8 JSON `ControlEnvelope` (`shipri-control-v1` AES-256-GCM AEAD) | Peer identity handshake, encrypted file board sync, download negotiation, cumulative `FLOW_CREDIT`, user pause/resume, cancel, completion, errors, and epoch resume. |
-| `shipri-binary` | Reliable, ordered (`ordered: true`, `binaryType = "arraybuffer"`) | 52-byte deterministic binary header (AAD) + AES-256-GCM ciphertext + 16-byte tag | Sequential encrypted file chunk streaming for active transfers. |
+| `shipri-binary` | Reliable, ordered (`ordered: true`, `binaryType = "arraybuffer"`) | 52-byte deterministic binary header (AAD) + AES-256-GCM ciphertext + 16-byte tag (`client/src/crypto/binary-framing.js`) | Sequential encrypted file chunk streaming for active transfers. |
 
 ### 2.1. No Cross-Channel Ordering Assumption
 While each individual SCTP channel (`shipri-control` and `shipri-binary`) delivers its own messages in order, **relative ordering between `shipri-control` and `shipri-binary` is NEVER assumed**. Implementations MUST enforce these fail-safe rules:
