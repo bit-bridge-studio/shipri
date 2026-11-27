@@ -446,8 +446,10 @@ export function createProductionRoomConnection(options = {}) {
     sendBinaryFrame,
     getState: buildSanitizedState,
     getShareUrl: () => shareUrl,
-    getMasterKeyBytes: () =>
-      keyLifecycle.getActiveSession()?.masterKeyBytes ?? null,
+    getMasterKeyBytes: () => {
+      const bytes = keyLifecycle.getActiveSession()?.masterKeyBytes;
+      return bytes instanceof Uint8Array ? new Uint8Array(bytes) : null;
+    },
     getPeerManager: () => peerManager,
     dispose,
   });

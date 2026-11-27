@@ -119,11 +119,13 @@ function linkReliableChannels(chA, chB) {
 function createReconnectSignalingHarness() {
   const baseFactory = createMockSocketFactory({ idPrefix: 'rec-peer' });
   const rooms = new Map();
+  const createdSockets = [];
   let roomSeq = 0x7100;
   let peerSeq = 1;
 
-  return function ioFactory(url, options) {
+  const ioFactory = function ioFactory(url, options) {
     const socket = baseFactory(url, options);
+    createdSockets.push(socket);
     const origEmit = socket.emit.bind(socket);
 
     socket.emit = (event, ...args) => {
@@ -224,6 +226,33 @@ function createReconnectSignalingHarness() {
 
     return socket;
   };
+
+  ioFactory.sockets = createdSockets;
+  ioFactory.simulateUnexpectedDrop = (targetSocket) => {
+    for (const [roomId, room] of rooms.entries()) {
+      const idx = room.peers.findIndex((p) => p.socket === targetSocket);
+      if (idx !== -1) {
+        const [removed] = room.peers.splice(idx, 1);
+        targetSocket.simulateDisconnect('transport close');
+        if (room.peers.length === 0) {
+          rooms.delete(roomId);
+        } else {
+          queueMicrotask(() => {
+            room.peers[0].socket.simulateServerEvent('peer:left', {
+              roomId,
+              peerId: removed.peerId,
+              reason: 'disconnect',
+            });
+          });
+        }
+        return roomId;
+      }
+    }
+    targetSocket.simulateDisconnect('transport close');
+    return null;
+  };
+
+  return ioFactory;
 }
 
 async function flushMicrotasks(rounds = 24) {
@@ -845,5 +874,158 @@ describe('Board reconnection and safe transfer resume (FF-6)', () => {
     coordB.dispose();
     localBoardA.dispose();
     remoteBoardB.dispose();
+  });
+
+  it('preserves boards and resumes paused transfers across transient signaling disconnect and reconnect', async () => {
+    const ioFactory = createReconnectSignalingHarness();
+    const clientA = createSignalingClient({ url: 'https://shipri.app', ioFactory });
+    const clientB = createSignalingClient({ url: 'https://shipri.app', ioFactory });
+    const pcFactoryA = createMockPeerConnectionFactory();
+    const pcFactoryB = createMockPeerConnectionFactory();
+    const storageA = createMemoryStorage();
+    const storageB = createMemoryStorage();
+    const locA = { origin: 'https://shipri.app', pathname: '/', search: '', hash: '' };
+    const locB = { origin: 'https://shipri.app', pathname: '/', search: '', hash: '' };
+
+    const persistedChunks = [];
+    const writeTarget = {
+      closed: false,
+      aborted: false,
+      async write(chunk) {
+        await new Promise((r) => setTimeout(r, 15));
+        persistedChunks.push(new Uint8Array(chunk));
+      },
+      async close() {
+        this.closed = true;
+      },
+      async abort() {
+        this.aborted = true;
+      },
+    };
+
+    const controllerA = createRoomBoardController({
+      signalingClient: clientA,
+      peerConnectionFactory: pcFactoryA,
+      storage: storageA,
+      locationObj: locA,
+      historyObj: { replaceState: () => {} },
+      windowObj: { isSecureContext: true },
+      navigatorObj: {},
+      origin: 'https://shipri.app',
+      autoConnect: true,
+    });
+    const controllerB = createRoomBoardController({
+      signalingClient: clientB,
+      peerConnectionFactory: pcFactoryB,
+      storage: storageB,
+      locationObj: locB,
+      historyObj: { replaceState: () => { locB.hash = ''; } },
+      windowObj: {
+        isSecureContext: true,
+        showSaveFilePicker: vi.fn(async () => ({
+          async createWritable() {
+            return writeTarget;
+          },
+        })),
+      },
+      navigatorObj: {},
+      origin: 'https://shipri.app',
+      autoConnect: false,
+    });
+
+    await controllerA.createRoom();
+    await flushMicrotasks();
+    const copied = [];
+    await controllerA.copyShareLink({ writeText: async (u) => copied.push(u) });
+    clientB.connect();
+    await controllerB.joinRoom(copied[0]);
+    await flushMicrotasks();
+
+    const pmA = controllerA.getConnection().getPeerManager();
+    const pmB = controllerB.getConnection().getPeerManager();
+    const bindChannels = async (prevPcA = null, prevPcB = null) => {
+      await vi.waitFor(() => {
+        const curA = pmA.getPeerConnection();
+        const curB = pmB.getPeerConnection();
+        expect(curA).not.toBeNull();
+        expect(curB).not.toBeNull();
+        expect(curA).not.toBe(prevPcA);
+        expect(curB).not.toBe(prevPcB);
+      });
+      const curPcA = pmA.getPeerConnection();
+      const curPcB = pmB.getPeerConnection();
+      const ctrlA = pmA.getChannel(PRODUCTION_CONTROL_CHANNEL_LABEL);
+      const binA = pmA.getChannel(PRODUCTION_BINARY_CHANNEL_LABEL);
+      const ctrlB = curPcB.simulateRemoteDataChannel(PRODUCTION_CONTROL_CHANNEL_LABEL);
+      const binB = curPcB.simulateRemoteDataChannel(PRODUCTION_BINARY_CHANNEL_LABEL);
+      linkReliableChannels(ctrlA, ctrlB).openBoth();
+      linkReliableChannels(binA, binB).openBoth();
+      return { curPcA, curPcB };
+    };
+
+    const firstPair = await bindChannels();
+    await vi.waitFor(() => {
+      expect(controllerA.getState().peerReady).toBe(true);
+      expect(controllerB.getState().peerReady).toBe(true);
+    });
+
+    const roomId = controllerB.getState().roomId;
+    const payload = createDeterministicBytes(CHUNK_SIZE_BYTES * 12 + 321, 59);
+    await controllerA.addLocalFiles([
+      createMutableMockFile({ name: 'sig-resume.bin', bytes: payload }),
+    ]);
+
+    await vi.waitFor(() => {
+      expect(controllerB.getState().remoteFiles).toHaveLength(1);
+    });
+
+    const remoteFileId = controllerB.getState().remoteFiles[0].fileId;
+    const dlRes = await controllerB.downloadRemoteFile(remoteFileId);
+    expect(dlRes.ok).toBe(true);
+    const tid = dlRes.transferId;
+
+    await vi.waitFor(() => {
+      expect(
+        controllerB.getState().transfers[0]?.bytesTransferred,
+      ).toBeGreaterThanOrEqual(CHUNK_SIZE_BYTES * 3);
+    });
+
+    // Drop signaling socket unexpectedly -> controller must keep roomId, board, and paused_reconnecting state
+    const socketB = ioFactory.sockets[1];
+    ioFactory.simulateUnexpectedDrop(socketB);
+    await flushMicrotasks();
+
+    expect(controllerB.getState().roomId).toBe(roomId);
+    expect(controllerB.getState().remoteFiles).toHaveLength(1);
+    expect(controllerB.getState().transfers[0]?.state).toBe('paused_reconnecting');
+    expect(controllerA.getState().transfers[0]?.state).toBe('paused_reconnecting');
+
+    // Bring signaling back online -> controller automatically rejoins and resumes transfer across epoch 2
+    socketB.simulateConnect();
+    await bindChannels(firstPair.curPcA, firstPair.curPcB);
+
+    await vi.waitFor(
+      () => {
+        const bTransfer = controllerB.getState().transfers.find((t) => t.transferId === tid);
+        const aTransfer = controllerA.getState().transfers.find((t) => t.transferId === tid);
+        expect(bTransfer?.state).toBe('completed');
+        expect(aTransfer?.state).toBe('completed');
+        expect(bTransfer?.epoch).toBe(2);
+      },
+      { timeout: 5000 },
+    );
+
+    expect(writeTarget.closed).toBe(true);
+    const totalLen = persistedChunks.reduce((sum, c) => sum + c.byteLength, 0);
+    const merged = new Uint8Array(totalLen);
+    let pos = 0;
+    for (const c of persistedChunks) {
+      merged.set(c, pos);
+      pos += c.byteLength;
+    }
+    expect(Buffer.compare(merged, payload)).toBe(0);
+
+    controllerA.dispose();
+    controllerB.dispose();
   });
 });

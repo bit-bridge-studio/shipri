@@ -326,6 +326,26 @@ export async function startPeerRoomHarness({
     peerB = await createPeerContext(browser, peerBOptions);
   }
 
+  function dropActiveRoomPeerTransport({ roomId, peerIndex = 1 } = {}) {
+    const room = roomId
+      ? signalingServer.activeRooms.get(roomId)
+      : signalingServer.activeRooms.values().next().value;
+    const peer = room?.peers?.[peerIndex] ?? null;
+    if (!peer?.socketId) {
+      return false;
+    }
+    const sock = signalingServer.io.sockets.sockets.get(peer.socketId);
+    if (sock?.conn && typeof sock.conn.close === 'function') {
+      sock.conn.close();
+      return true;
+    }
+    if (sock) {
+      sock.disconnect(true);
+      return true;
+    }
+    return false;
+  }
+
   async function close() {
     for (const p of createdPeers) {
       await p.close();
@@ -360,6 +380,7 @@ export async function startPeerRoomHarness({
     peerA,
     peerB,
     createPeerContext,
+    dropActiveRoomPeerTransport,
     close,
   });
 }
