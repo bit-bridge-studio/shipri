@@ -11,6 +11,7 @@ import {
   openSaveTargetSynchronously,
   queryStorageEstimate,
 } from '../persistence/file-persistence.js';
+import { evaluateFilePersistenceEligibility } from '../persistence/capability-limits.js';
 
 const ACTIVE_DIRECTION_STATES = new Set([
   'preparing_persistence',
@@ -75,7 +76,7 @@ export function createDownloadNegotiator({
 
   let disposed = false;
   let pendingIncomingPrepare = false;
-  let lastCapability = evaluatePersistenceCapability({ windowObj });
+  let lastCapability = evaluatePersistenceCapability({ windowObj, navigatorObj });
   let lastStorageEstimate = Object.freeze({
     quotaBytes: null,
     usageBytes: null,
@@ -112,18 +113,21 @@ export function createDownloadNegotiator({
   }
 
   function buildPreEvaluatedEntry(entry, capability, storageEstimate) {
-    const insufficientStorage = Boolean(
-      storageEstimate.availableBytes !== null &&
-        entry.fileSize > storageEstimate.availableBytes,
-    );
+    const eligibility = evaluateFilePersistenceEligibility({
+      fileSize: entry.fileSize,
+      capability,
+      storageEstimate,
+    });
     return Object.freeze({
       fileId: entry.fileId,
       canDownload: Boolean(
-        capability.supported &&
-          entry.availability === 'available' &&
-          !insufficientStorage,
+        eligibility.eligible && entry.availability === 'available',
       ),
-      insufficientStorage,
+      insufficientStorage: eligibility.insufficientStorage,
+      exceedsProtocolLimit: eligibility.exceedsProtocolLimit,
+      limitReason: eligibility.reason,
+      limitGuidance: eligibility.guidance,
+      effectiveMaxBytes: eligibility.maxBytes,
       capability,
       storageEstimate,
     });
@@ -148,6 +152,8 @@ export function createDownloadNegotiator({
         !prev ||
         prev.canDownload !== next.canDownload ||
         prev.insufficientStorage !== next.insufficientStorage ||
+        prev.exceedsProtocolLimit !== next.exceedsProtocolLimit ||
+        prev.limitGuidance !== next.limitGuidance ||
         prev.capability.supported !== next.capability.supported ||
         prev.storageEstimate.availableBytes !== next.storageEstimate.availableBytes
       ) {
@@ -170,7 +176,7 @@ export function createDownloadNegotiator({
     if (disposed) {
       return Promise.resolve(lastStorageEstimate);
     }
-    lastCapability = evaluatePersistenceCapability({ windowObj });
+    lastCapability = evaluatePersistenceCapability({ windowObj, navigatorObj });
     const list = Array.isArray(entries) ? entries : [];
     const immediateChange = syncPreEvaluatedCache(list);
     if (immediateChange) {
@@ -235,7 +241,7 @@ export function createDownloadNegotiator({
       return Promise.resolve({ ok: false, code: 'PEER_UNAVAILABLE' });
     }
 
-    lastCapability = evaluatePersistenceCapability({ windowObj });
+    lastCapability = evaluatePersistenceCapability({ windowObj, navigatorObj });
     if (!lastCapability.supported) {
       return Promise.resolve({
         ok: false,
@@ -245,14 +251,17 @@ export function createDownloadNegotiator({
     }
 
     const cachedEval = preEvaluated.get(fileId);
-    const insufficientStorage =
-      cachedEval?.insufficientStorage ??
-      Boolean(
-        lastStorageEstimate.availableBytes !== null &&
-          entry.fileSize > lastStorageEstimate.availableBytes,
-      );
-    if (insufficientStorage) {
-      return Promise.resolve({ ok: false, code: 'LIMIT_EXCEEDED' });
+    const eligibility = evaluateFilePersistenceEligibility({
+      fileSize: entry.fileSize,
+      capability: lastCapability,
+      storageEstimate: cachedEval?.storageEstimate ?? lastStorageEstimate,
+    });
+    if (!eligibility.eligible) {
+      return Promise.resolve({
+        ok: false,
+        code: eligibility.reason || 'LIMIT_EXCEEDED',
+        guidance: eligibility.guidance,
+      });
     }
 
     const incomingDirection = formatTransferDirection(
@@ -617,7 +626,7 @@ export function createDownloadNegotiator({
   }
 
   function getCapabilities() {
-    lastCapability = evaluatePersistenceCapability({ windowObj });
+    lastCapability = evaluatePersistenceCapability({ windowObj, navigatorObj });
     return {
       capability: lastCapability,
       storageEstimate: lastStorageEstimate,
