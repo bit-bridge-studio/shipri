@@ -75,5 +75,40 @@ describe('BE-5 reproducible Docker and deployment configuration', () => {
     expect(caddyfile).toContain('{$SHIPRI_ROBOTS_HEADER:noindex, nofollow}');
     expect(caddyfile).toContain('reverse_proxy /socket.io/* server:5001');
     expect(caddyfile).toContain('reverse_proxy /health server:5001');
+    expect(caddyfile).toContain('reverse_proxy /ready server:5001');
+    expect(caddyfile).toContain('respond /metrics 404');
+  });
+
+  test('synchronizes /ready routing, /metrics isolation, and environment headers across Nginx, Dockerfile, and docker-compose.prod.yml', () => {
+    const caddyfile = readRepoFile('Caddyfile');
+    const nginxConf = readRepoFile('client/nginx.conf');
+    const clientDockerfile = readRepoFile('client/Dockerfile');
+    const prodCompose = readRepoFile('docker-compose.prod.yml');
+
+    expect(caddyfile).toContain('reverse_proxy /ready server:5001');
+    expect(caddyfile).toContain('respond /metrics 404');
+
+    expect(nginxConf).toContain('location = /ready');
+    expect(nginxConf).toContain('proxy_pass http://server:5001/ready;');
+    expect(nginxConf).toContain('location = /metrics');
+    expect(nginxConf).toContain('return 404;');
+    expect(nginxConf).toContain('${SHIPRI_ENV_HEADER}');
+    expect(nginxConf).toContain('${SHIPRI_ROBOTS_HEADER}');
+
+    expect(clientDockerfile).toContain('ENV SHIPRI_ENV_HEADER=poc-staging');
+    expect(clientDockerfile).toContain(
+      'ENV SHIPRI_ROBOTS_HEADER="noindex, nofollow"',
+    );
+    expect(clientDockerfile).toContain('ENV NGINX_ENVSUBST_FILTER=^SHIPRI_');
+    expect(clientDockerfile).toContain(
+      'COPY nginx.conf /etc/nginx/templates/default.conf.template',
+    );
+
+    expect(prodCompose).toContain(
+      'SHIPRI_ENV_HEADER=${SHIPRI_ENV_HEADER:-poc-staging}',
+    );
+    expect(prodCompose).toContain(
+      'SHIPRI_ROBOTS_HEADER=${SHIPRI_ROBOTS_HEADER:-noindex, nofollow}',
+    );
   });
 });
