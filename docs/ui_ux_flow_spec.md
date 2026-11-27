@@ -48,12 +48,13 @@ Removing a local advertisement emits `FILE_REMOVE` and removes the card from bot
 
 ## 4. Download Flow, Concurrency & Browser Capability Limits
 
-### 4.1. Pre-Evaluated Capability & Synchronous Save Dialog
-1. When remote `FILE_ADVERTISE` entries arrive, the client pre-evaluates File System Access API support (`typeof window.showSaveFilePicker === 'function'` in a Secure Context) and caches optional `navigator.storage.estimate()` capacity hints on the card state.
-2. Unsupported browsers (or non-secure contexts) display explicit capability guidance on the board before any download request can be initiated; Service Worker streaming and IndexedDB buffering are deferred future extensions and are not promised as active MVP fallbacks.
-3. Clicking `Download` invokes `window.showSaveFilePicker()` **synchronously inside the click gesture** before any asynchronous work so transient user activation is preserved.
-4. Cancelling the save dialog (`AbortError`) leaves the board unchanged and sends zero network messages.
-5. Only after the writable file stream is open does the downloader allocate a random `transferId`, emit `DOWNLOAD_REQUEST`, and wait for `DOWNLOAD_ACCEPTED` before granting initial cumulative `FLOW_CREDIT` (`2 MiB`).
+### 4.1. Pre-Evaluated Capability, Limits & Synchronous Save Dialog
+1. When remote `FILE_ADVERTISE` entries arrive, the client pre-evaluates File System Access API support (`detectBrowserPersistenceProfile` checking Secure Context + `typeof window.showSaveFilePicker === 'function'`) and evaluates each file's size against the `256 TiB` protocol cap (`PROTOCOL_MAX_FILE_SIZE_BYTES`) and cached `navigator.storage.estimate().availableBytes` (`evaluateFilePersistenceEligibility`).
+2. Unsupported browsers (for example Firefox, Safari, or mobile WebViews without `window.showSaveFilePicker()`) or non-secure contexts display explicit capability guidance on the board and reject downloads before any `DOWNLOAD_REQUEST` can be sent; Service Worker streaming and IndexedDB buffering remain explicitly disabled deferred future extensions (`DEFERRED_PERSISTENCE_EXTENSIONS`).
+3. When supported, the remote board displays active persistence mode alongside estimated available storage or the protocol file size limit, and disables `Download` with inline `limitGuidance` on cards exceeding local quota or protocol limits before calling `window.showSaveFilePicker()` or emitting `DOWNLOAD_REQUEST`.
+4. Clicking an eligible `Download` button invokes `window.showSaveFilePicker()` **synchronously inside the click gesture** before any asynchronous work so transient user activation is preserved.
+5. Cancelling the save dialog (`AbortError`) leaves the board unchanged and sends zero network messages.
+6. Only after the writable file stream is open does the downloader allocate a random `transferId`, emit `DOWNLOAD_REQUEST`, and wait for `DOWNLOAD_ACCEPTED` before granting initial cumulative `FLOW_CREDIT` (`2 MiB`).
 
 ### 4.2. Single-Transfer-Per-Direction Concurrency UX
 The MVP permits at most **one active or paused transfer per direction** (`ownerMemberId -> downloaderMemberId`), while allowing simultaneous opposite-direction transfers:
