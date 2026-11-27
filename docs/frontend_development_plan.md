@@ -50,7 +50,7 @@ Implement fragment-key lifecycle, domain-separated board metadata encryption, au
 
 ### FF-2: Implement Production Peer Connection
 
-**Progress:** Extracted reusable production-safe `client/src/webrtc/ice-config.js` and `client/src/webrtc/peer-connection.js` modules (`[42]`, `#113`) isolated from `client/src/prototype/`, with generation-scoped disposal, bidirectional offerer/answerer `reconnect()` negotiation and stale-offer rejection, local `room:leave` teardown, dual `shipri-control`/`shipri-binary` channel lifecycle, and unit tests (`client/test/production-peer-connection.test.js`).
+**Status:** Completed (`2026-11-27`) - extracted reusable production-safe `client/src/webrtc/ice-config.js` and `client/src/webrtc/peer-connection.js` modules (`[42]`, `#113`) isolated from `client/src/prototype/`, and composed them with room key/authorization and `shipri-control-v1` AEAD messaging in `client/src/webrtc/room-connection.js` (`createProductionRoomConnection`, `[48]`) with mutual `PEER_HELLO`, equal-peer control/binary channel initiation, and redacted path/state propagation.
 
 Reuse production-safe signaling and WebRTC modules, enforce room authorization, create control/binary channels, and expose connection and relay state.
 
