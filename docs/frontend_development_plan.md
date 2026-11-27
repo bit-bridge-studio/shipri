@@ -62,6 +62,8 @@ Allow either peer to add and remove local file advertisements. Synchronize encry
 
 ### FF-4: Implement Download Requests and Transfer Sessions
 
+**Status:** Completed (`2026-11-27`) - implemented synchronous File System Access API preparation and capability/storage-estimate pre-evaluation (`client/src/persistence/file-persistence.js`) alongside equal-peer `DOWNLOAD_REQUEST`/`DOWNLOAD_ACCEPTED`/`DOWNLOAD_REJECTED` session negotiation and single-transfer-per-direction `BUSY` enforcement (`client/src/transfer/download-negotiator.js`, `[51]`).
+
 Open persistence before requesting a remote file, validate request/accept/reject messages, and manage independent transfer identities and state.
 
 ### FF-5: Implement Bounded Bidirectional Transfer
