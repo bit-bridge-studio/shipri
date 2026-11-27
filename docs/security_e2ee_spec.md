@@ -183,7 +183,7 @@ function buildChunkIv(chunkIndex) {
 
 * **Zero Nonce Reuse Across Transfers**: Simultaneous transfers in the same or opposite directions have distinct `transferId` and/or `direction` values, yielding independent HKDF keys even when both encrypt `chunkIndex = 0`.
 * **Zero Nonce Reuse Across Resumes**: Before a resumed transfer re-sends any chunk index, `RESUME_REQUEST` / `RESUME_ACCEPTED` strictly increments `epoch` (`newEpoch > previousEpoch`), deriving a brand-new HKDF chunk key.
-* **Fail-Closed Verification**: The downloader validates frame length (`byteLength === 52 + plaintextLength + 16`), magic, version, reserved byte, `transferId`, `fileId`, `directionCode`, active `epoch`, expected sequential `chunkIndex`, and credit boundary (`(chunkIndex * CHUNK_SIZE_BYTES + plaintextLength) <= maxPlaintextOffsetExclusive`) before decrypting and passing the plaintext buffer to persistence.
+* **Fail-Closed Verification**: The downloader validates frame length (`byteLength === 52 + plaintextLength + 16`), magic, version, reserved byte, `transferId`, `fileId`, `directionCode`, active `epoch`, expected sequential `chunkIndex`, and credit boundary (`(chunkIndex * CHUNK_SIZE_BYTES + plaintextLength) <= maxPlaintextOffsetExclusive`) before decrypting and passing the plaintext buffer to persistence. Implemented in `client/src/crypto/binary-framing.js`.
 
 ---
 
