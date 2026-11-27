@@ -44,6 +44,8 @@ Prototype-only modules listed in `client/src/prototype/prototype-manifest.js` (`
 
 ### FF-1: Implement Room Key and E2EE Primitives
 
+**Progress:** Implemented production HKDF room authorization (`client/src/crypto/room-auth.js`, `[43]`), URL fragment key and tab-scoped `sessionStorage` lifecycle (`client/src/crypto/fragment-key.js`, `[44]`), encrypted file-board metadata codec (`client/src/crypto/board-metadata.js`, `[45]`), and authenticated `shipri-control-v1` AEAD control codec with monotonic `FLOW_CREDIT` tracker (`client/src/crypto/control-codec.js`, `[46]`). Remaining in `FF-1`: epoch-safe binary chunk framing (`[47]`).
+
 Implement fragment-key lifecycle, domain-separated board metadata encryption, authenticated control messages, and per-transfer epoch chunk encryption.
 
 ### FF-2: Implement Production Peer Connection

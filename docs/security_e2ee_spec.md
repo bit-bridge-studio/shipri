@@ -108,7 +108,7 @@ interface ControlEnvelope {
 
 * **Associated Data (AAD)**: `utf8("shipri-control-v1:${roomId}:${senderMemberId}")`.
 * **IV Generation**: Fresh 12-byte CSPRNG random IV (`crypto.getRandomValues(new Uint8Array(12))`) per outbound control message.
-* **Verification**: Receivers validate envelope fields, decode `iv` (must be exactly 12 bytes) and `ciphertext`, verify the AES-GCM tag with the bound AAD, and parse the decrypted UTF-8 JSON `ControlMessage`. Any decryption, AAD, or schema failure drops the message and fails closed without mutating state.
+* **Verification**: Receivers validate envelope fields, decode `iv` (must be exactly 12 bytes) and `ciphertext`, verify the AES-GCM tag with the bound AAD, and parse the decrypted UTF-8 JSON `ControlMessage`. Any decryption, AAD, or schema failure drops the message and fails closed without mutating state. Implemented in `client/src/crypto/control-codec.js`.
 
 ### 3.2. Canonical `FILE_ADVERTISE` Encrypted Metadata Schema
 Inside the authenticated `ControlEnvelope`, `FILE_ADVERTISE` encrypts file metadata separately under the `shipri-board-metadata-v1` AES-256-GCM key using this single canonical unpadded `base64url` structure (synchronized verbatim with `p2p_data_protocol_spec.md`):
