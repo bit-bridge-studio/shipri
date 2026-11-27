@@ -117,11 +117,13 @@ To verify actual WebRTC P2P transmission, we automate interactions between two d
   * Install client dependencies (`cd client && npm ci`) and download the Chromium browser binary (`npx --prefix client playwright install chromium`).
   * Run the Chromium peer-room E2E suite with `npm --prefix client run test:e2e`.
   * Playwright specs use the `client/e2e/*.e2e.js` naming convention configured in `client/playwright.config.js` (`testDir: './e2e'`, `testMatch: /.*\.e2e\.js$/`) so `npm --prefix client test` (`vitest run`) continues running unit/integration tests independently.
-* **Isolated Harness & Zero-Fixture Stubs (`FF-8` / `[58]`)**:
-  * `client/e2e/helpers/peer-room-harness.js` spins up an ephemeral RFC 5389/5766 local UDP STUN and HMAC-SHA1 TURN relay server (`client/e2e/helpers/local-turn-server.js` with a per-run CSPRNG secret), a production-configured `createSignalingServer` instance with HTTP/Socket.IO zero-knowledge audit listeners, a per-run Vite server (dev or compiled bundle preview), and isolated Playwright browser contexts.
+* **Isolated Harness & Zero-Fixture Stubs (`FF-8` / `[58]`, `[59]`)**:
+  * `client/e2e/helpers/peer-room-harness.js` spins up an ephemeral RFC 5389/5766 local UDP STUN and HMAC-SHA1 TURN relay server (`client/e2e/helpers/local-turn-server.js` with a per-run CSPRNG secret), a production-configured `createSignalingServer` instance with HTTP/Socket.IO zero-knowledge audit listeners, a per-run Vite server (dev or compiled bundle preview), isolated Playwright browser contexts, and `dropActiveRoomPeerTransport` for loopback network-drop simulation.
   * `client/e2e/helpers/deterministic-files.js` synthesizes virtual files directly in memory (`createDeterministicBytes`, `attachInputFile`, `dropVirtualFile`, `computeSha256Hex`, `computeStreamingDigestHex`) without committing private fixtures.
   * `client/e2e/helpers/persistence-stub.js` installs isolated per-context stubs for `window.showSaveFilePicker()`, `navigator.clipboard`, `navigator.storage.estimate()`, and optional `missing-picker` / `insecure-context` capability states.
   * `client/e2e/setup-smoke.e2e.js` verifies two isolated Chromium contexts exchanging deterministic files through the persistence stub.
+  * `client/e2e/shared-board-and-transfers.e2e.js` covers both equal peers advertising files, `#key=` fragment stripping, save-dialog cancellation, click downloads with byte-for-byte SHA-256 verification, board removal, simultaneous opposite-direction transfers, independent pause/resume, and isolated transfer cancellation.
+  * `client/e2e/resilience-turn-and-privacy.e2e.js` covers signaling/auth/capacity errors (`INVALID_ROOM_ID`, `ROOM_NOT_FOUND`, `UNAUTHORIZED`, `ROOM_FULL`), unsupported-browser blocking before `DOWNLOAD_REQUEST`, mid-transfer network interruption with offline board convergence and epoch-rotating resume, forced TURN (`iceTransportPolicy: "relay"`), and HTTP/Socket.IO backend zero-knowledge auditing.
 * **Documented Browser Limitations**:
   * Chromium supports the verified `window.showSaveFilePicker()` direct-to-disk MVP path tested with `--use-fake-ui-for-media-stream`, `--use-fake-device-for-media-stream`, and `--disable-features=WebRtcHideLocalIpsWithMdns`.
   * Firefox and WebKit lack `window.showSaveFilePicker()` and therefore only validate unsupported-browser guidance and blocked `DOWNLOAD_REQUEST` behavior until Service Worker or IndexedDB fallbacks are separately approved.
@@ -183,17 +185,17 @@ To ensure the application performs well on poor networks and successfully falls 
 
 ### 4.1. Simulating Symmetric NAT (Force TURN)
 During development and CI, we must prove that the TURN server is functional and that the client gracefully falls back to it.
-* **Test Method**: In Playwright or local tests, we block direct STUN connections.
-* **Implementation**: We initialize the `RTCPeerConnection` with the option `iceTransportPolicy: "relay"`. This forces the browser to discard local and host candidates and route 100% of the traffic through the TURN server.
-* **Verification**: Verify that the transfer completes successfully and that the client UI displays the "Relayed via Server" status message.
+* **Test Method**: In Playwright (`client/e2e/resilience-turn-and-privacy.e2e.js`) and unit harness tests (`client/test/nat-turn-diagnostics.test.js`), direct STUN/host paths are bypassed via `iceTransportPolicy: "relay"`.
+* **Implementation**: The E2E harness starts `client/e2e/helpers/local-turn-server.js` with per-run ephemeral HMAC-SHA1 credentials and wraps `RTCPeerConnection` with `iceTransportPolicy: "relay"` (`forceTurnRelay: true`), forcing 100% of WebRTC traffic through the TURN server.
+* **Verification**: Verify that bidirectional transfers complete with byte-for-byte SHA-256 matches, TURN allocations/relayed bytes advance (`relayedBytesOut > 0`, `relayedBytesIn > 0`), and the client UI displays the `TURN Relay` indicator (`aria-label="TURN relay active"`).
 
 ### 4.2. Network Interruption & Resumption (Robustness Test)
-* **Test Method**:
-  1. Start a 100MB file transfer.
-  2. At 50%, programmatically disable the network adapter of the Sender browser (e.g., using Playwright's `context.setOffline(true)`).
-  3. Wait 5 seconds (verify transfer pauses and "Reconnecting..." UI overlay appears).
-  4. Enable the network adapter (`context.setOffline(false)`).
-  5. **Verification**: Verify that the connection recovers and the file transfer finishes, resulting in a correct cryptographic hash match.
+* **Test Method** (`client/e2e/resilience-turn-and-privacy.e2e.js` and `client/test/reconnection-and-resume.test.js`):
+  1. Start an active multi-chunk encrypted file transfer with slow persistence writes.
+  2. Mid-stream, drop peer connectivity (`context.setOffline(true)` plus loopback Socket.IO transport close).
+  3. Verify active/paused transfers enter `Paused (reconnecting)` while local and remote board mutations happen offline.
+  4. Restore connectivity (`context.setOffline(false)`) so signaling auto-rejoins with preserved room keys.
+  5. **Verification**: Verify that the encrypted board converges, transfers rotate to the next cryptographic epoch (`RESUME_REQUEST` / `RESUME_ACCEPTED`), and the completed file matches its original SHA-256 chain byte-for-byte.
 
 ---
 
