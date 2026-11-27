@@ -12,6 +12,7 @@ import {
   createRoomAuthorizationSession,
   deriveRoomAuthCredentials,
 } from '../src/crypto/room-auth.js';
+import { createFragmentKeyLifecycle } from '../src/crypto/fragment-key.js';
 import { createSignalingClient } from '../src/signaling/socket-client.js';
 import { createMockSocketFactory } from './helpers/mock-socket.js';
 
@@ -203,5 +204,149 @@ describe('production room authorization lifecycle (ticket [43])', () => {
 
     session.dispose();
     client.dispose();
+  });
+
+  it('completes creator-to-joiner share link flow with matching authToken/authVerifier and preserves authorized state across non-terminal errors until expiry or disconnect', async () => {
+    const socketFactory = createMockSocketFactory({ idPrefix: 'e2e-auth' });
+    const creatorEmitted = [];
+    const joinerEmitted = [];
+    let creatorSocket = null;
+    let joinerSocket = null;
+
+    const creatorClient = createSignalingClient({
+      url: 'https://shipri.app',
+      ioFactory: (url, opts) => {
+        creatorSocket = socketFactory(url, opts);
+        const origEmit = creatorSocket.emit.bind(creatorSocket);
+        creatorSocket.emit = (event, payload) => {
+          creatorEmitted.push({ event, payload });
+          return origEmit(event, payload);
+        };
+        return creatorSocket;
+      },
+    });
+    const joinerClient = createSignalingClient({
+      url: 'https://shipri.app',
+      ioFactory: (url, opts) => {
+        joinerSocket = socketFactory(url, opts);
+        const origEmit = joinerSocket.emit.bind(joinerSocket);
+        joinerSocket.emit = (event, payload) => {
+          joinerEmitted.push({ event, payload });
+          return origEmit(event, payload);
+        };
+        return joinerSocket;
+      },
+    });
+    creatorClient.connect();
+    joinerClient.connect();
+
+    const creatorStorage = new Map();
+    const joinerStorage = new Map();
+    const wrapStorage = (m) => ({
+      getItem: (k) => (m.has(k) ? m.get(k) : null),
+      setItem: (k, v) => m.set(k, String(v)),
+      removeItem: (k) => m.delete(k),
+    });
+
+    const lifecycleA = createFragmentKeyLifecycle({
+      storage: wrapStorage(creatorStorage),
+      locationObj: { origin: 'https://shipri.app', pathname: '/', search: '', hash: '' },
+      historyObj: { replaceState: () => {} },
+    });
+    const authA = createRoomAuthorizationSession({ signalingClient: creatorClient });
+
+    // Creator prepares key BEFORE room:create
+    const pending = lifecycleA.prepareCreation();
+    await authA.createAuthorizedRoom(pending.masterKeyBytes);
+    const creatorVerifier = creatorEmitted[0].payload.authVerifier;
+
+    // Server assigns roomId -> bind exact pre-generated key without regenerating
+    creatorSocket.simulateServerEvent('room:created', {
+      roomId: 'ship-77ef',
+      peerId: 'peer-a',
+      negotiationDuty: 'offerer',
+    });
+    const bound = lifecycleA.bindCreatedRoom('ship-77ef');
+    expect(bound.masterKeyBase64Url).toBe(pending.masterKeyBase64Url);
+
+    const shareUrl = buildRoomShareUrl({
+      origin: 'https://shipri.app',
+      roomId: bound.roomId,
+      masterKeyBase64Url: bound.masterKeyBase64Url,
+    });
+    const parsedShare = new URL(shareUrl);
+
+    // Joiner extracts fragment, derives authToken, and matches creator authVerifier
+    const joinerLoc = {
+      origin: parsedShare.origin,
+      pathname: parsedShare.pathname,
+      search: parsedShare.search,
+      hash: parsedShare.hash,
+    };
+    const lifecycleB = createFragmentKeyLifecycle({
+      storage: wrapStorage(joinerStorage),
+      locationObj: joinerLoc,
+      historyObj: { replaceState: () => { joinerLoc.hash = ''; } },
+    });
+    const authB = createRoomAuthorizationSession({ signalingClient: joinerClient });
+    const extracted = lifecycleB.resolveForRoom('ship-77ef');
+    expect(extracted.ok).toBe(true);
+    await authB.joinAuthorizedRoom('ship-77ef', extracted.masterKeyBytes);
+
+    const joinerToken = joinerEmitted[0].payload.authToken;
+    expect(sha256Base64Url(joinerToken)).toBe(creatorVerifier);
+    joinerSocket.simulateServerEvent('room:joined', {
+      roomId: 'ship-77ef',
+      peerId: 'peer-b',
+      negotiationDuty: 'answerer',
+    });
+
+    // Non-terminal atomic no-op errors MUST preserve authorized state & credentials
+    creatorSocket.simulateServerEvent('room:error', {
+      code: 'INVALID_PAYLOAD',
+      message: 'Malformed probe payload.',
+    });
+    expect(authA.getState()).toMatchObject({
+      status: 'authorized',
+      roomId: 'ship-77ef',
+      hasActiveCredentials: true,
+    });
+
+    creatorSocket.simulateServerEvent('room:error', {
+      roomId: 'ship-9999',
+      code: 'UNAUTHORIZED',
+      message: 'Cross-room check.',
+    });
+    expect(authA.getState()).toMatchObject({
+      status: 'authorized',
+      roomId: 'ship-77ef',
+      hasActiveCredentials: true,
+    });
+
+    // Active room expiry (ROOM_NOT_FOUND for active room) clears credentials
+    creatorSocket.simulateServerEvent('room:error', {
+      roomId: 'ship-77ef',
+      code: 'ROOM_NOT_FOUND',
+      message: 'Room expired.',
+    });
+    expect(authA.getState()).toMatchObject({
+      status: 'failed',
+      roomId: null,
+      hasActiveCredentials: false,
+    });
+
+    // Socket disconnect while authorized clears joiner credentials safely
+    expect(authB.getState().status).toBe('authorized');
+    joinerSocket.simulateDisconnect('transport close');
+    expect(authB.getState()).toMatchObject({
+      status: 'disconnected',
+      roomId: null,
+      hasActiveCredentials: false,
+    });
+
+    authA.dispose();
+    authB.dispose();
+    creatorClient.dispose();
+    joinerClient.dispose();
   });
 });
