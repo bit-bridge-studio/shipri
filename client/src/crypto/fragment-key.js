@@ -204,15 +204,41 @@ export function createFragmentKeyLifecycle({
   historyObj = globalThis.window?.history,
 } = {}) {
   let activeSession = null;
+  let pendingCreation = null;
+
+  function wipePendingCreation() {
+    if (pendingCreation?.masterKeyBytes instanceof Uint8Array) {
+      pendingCreation.masterKeyBytes.fill(0);
+    }
+    pendingCreation = null;
+  }
 
   function wipeInMemory() {
     if (activeSession?.masterKeyBytes instanceof Uint8Array) {
       activeSession.masterKeyBytes.fill(0);
     }
     activeSession = null;
+    wipePendingCreation();
   }
 
-  function createForRoom(roomId) {
+  function prepareCreation() {
+    wipeInMemory();
+    const { masterKeyBytes, masterKeyBase64Url } = generateMasterKey();
+    const memberId = generateMemberId();
+    pendingCreation = {
+      masterKeyBytes,
+      masterKeyBase64Url,
+      memberId,
+    };
+    return {
+      ok: true,
+      masterKeyBytes: new Uint8Array(masterKeyBytes),
+      masterKeyBase64Url,
+      memberId,
+    };
+  }
+
+  function bindCreatedRoom(roomId) {
     if (!isValidRoomId(roomId)) {
       return {
         ok: false,
@@ -220,9 +246,84 @@ export function createFragmentKeyLifecycle({
         message: 'Room identifier is invalid.',
       };
     }
+    if (!pendingCreation) {
+      return {
+        ok: false,
+        code: 'MISSING_KEY',
+        message: 'No pending room encryption key to bind.',
+      };
+    }
+
+    const boundMaterial = pendingCreation;
+    pendingCreation = null;
+    if (activeSession?.masterKeyBytes instanceof Uint8Array) {
+      activeSession.masterKeyBytes.fill(0);
+    }
+
+    saveRoomSession({
+      roomId,
+      masterKeyBase64Url: boundMaterial.masterKeyBase64Url,
+      memberId: boundMaterial.memberId,
+      storage,
+    });
+    activeSession = {
+      roomId,
+      masterKeyBytes: boundMaterial.masterKeyBytes,
+      masterKeyBase64Url: boundMaterial.masterKeyBase64Url,
+      memberId: boundMaterial.memberId,
+      source: 'created',
+    };
+    return { ok: true, ...activeSession };
+  }
+
+  function createForRoom(roomId, pregenerated) {
+    if (!isValidRoomId(roomId)) {
+      return {
+        ok: false,
+        code: 'INVALID_ROOM_ID',
+        message: 'Room identifier is invalid.',
+      };
+    }
+
+    let masterKeyBytes;
+    let masterKeyBase64Url;
+    let memberId;
+
+    if (pregenerated !== undefined) {
+      if (!pregenerated || typeof pregenerated !== 'object') {
+        return {
+          ok: false,
+          code: 'INVALID_KEY',
+          message: 'Room encryption key is malformed.',
+        };
+      }
+      try {
+        if (pregenerated.masterKeyBytes instanceof Uint8Array) {
+          if (pregenerated.masterKeyBytes.byteLength !== ROOM_KEY_BYTES) {
+            throw new TypeError('Invalid master key byte length.');
+          }
+          masterKeyBytes = new Uint8Array(pregenerated.masterKeyBytes);
+          masterKeyBase64Url = encodeBase64Url(masterKeyBytes);
+        } else {
+          masterKeyBytes = decodeMasterKey(pregenerated.masterKeyBase64Url);
+          masterKeyBase64Url = pregenerated.masterKeyBase64Url;
+        }
+        memberId = isValidMemberId(pregenerated.memberId)
+          ? pregenerated.memberId
+          : generateMemberId();
+      } catch {
+        return {
+          ok: false,
+          code: 'INVALID_KEY',
+          message: 'Room encryption key is malformed.',
+        };
+      }
+    } else {
+      ({ masterKeyBytes, masterKeyBase64Url } = generateMasterKey());
+      memberId = generateMemberId();
+    }
+
     wipeInMemory();
-    const { masterKeyBytes, masterKeyBase64Url } = generateMasterKey();
-    const memberId = generateMemberId();
     saveRoomSession({ roomId, masterKeyBase64Url, memberId, storage });
     activeSession = {
       roomId,
@@ -314,6 +415,8 @@ export function createFragmentKeyLifecycle({
   }
 
   return Object.freeze({
+    prepareCreation,
+    bindCreatedRoom,
     createForRoom,
     resolveForRoom,
     getActiveSession: () => activeSession,
