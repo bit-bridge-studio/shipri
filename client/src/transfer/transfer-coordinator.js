@@ -1,4 +1,5 @@
 import { decodeBinaryFrameHeader } from '../crypto/binary-framing.js';
+import { FIXED_CHUNK_SIZE_BYTES } from '../crypto/board-metadata.js';
 import {
   isValidMemberId,
   validateControlMessage,
@@ -44,6 +45,9 @@ export function createTransferCoordinator({
   cryptoProcessor: providedCryptoProcessor,
   windowObj = globalThis.window,
   navigatorObj = globalThis.navigator,
+  graceWindowMs = 60_000,
+  setTimeoutFn = globalThis.setTimeout,
+  clearTimeoutFn = globalThis.clearTimeout,
   nowFn = Date.now,
   onChange,
   onError,
@@ -53,6 +57,7 @@ export function createTransferCoordinator({
   }
 
   let disposed = false;
+  let disconnectGraceTimer = null;
   const cryptoProcessor =
     providedCryptoProcessor ?? createChunkCryptoProcessor();
   const ownsCryptoProcessor = !providedCryptoProcessor;
@@ -60,6 +65,14 @@ export function createTransferCoordinator({
   const progressTracker = createTransferProgressTracker({ nowFn });
   const ownerStreamers = new Map();
   const downloaderReceivers = new Map();
+  const pendingResumeEpochs = new Map();
+
+  function cancelDisconnectGraceTimer() {
+    if (disconnectGraceTimer !== null) {
+      clearTimeoutFn(disconnectGraceTimer);
+      disconnectGraceTimer = null;
+    }
+  }
 
   function emitChange() {
     if (!disposed && typeof onChange === 'function') {
@@ -151,6 +164,7 @@ export function createTransferCoordinator({
         onError,
         onStateChange: (streamerState) => {
           negotiator.updateSessionState(session.transferId, streamerState.state, {
+            epoch: streamerState.epoch,
             errorCode: streamerState.errorCode,
           });
           progressTracker.updateTransfer(session.transferId, {
@@ -194,6 +208,7 @@ export function createTransferCoordinator({
         onError,
         onStateChange: (rxState) => {
           negotiator.updateSessionState(session.transferId, rxState.state, {
+            epoch: rxState.epoch,
             errorCode: rxState.errorCode,
           });
           progressTracker.updateTransfer(session.transferId, {
@@ -349,6 +364,7 @@ export function createTransferCoordinator({
         if (!verifyCounterparty(payload.direction, senderMemberId)) {
           return { ok: false, code: 'SENDER_MISMATCH' };
         }
+        pendingResumeEpochs.delete(payload.transferId);
         await found.actor.cancel();
         negotiator.updateSessionState(payload.transferId, 'cancelled', {
           clearPersistenceTarget: true,
@@ -399,6 +415,7 @@ export function createTransferCoordinator({
       if (!found || !verifyCounterparty(payload.direction, senderMemberId)) {
         return { ok: true, ignored: true };
       }
+      pendingResumeEpochs.delete(payload.transferId);
       await found.actor.failExternal(payload.code);
       negotiator.updateSessionState(payload.transferId, 'failed', {
         errorCode: payload.code,
@@ -411,6 +428,227 @@ export function createTransferCoordinator({
         code: payload.code,
         transferId: payload.transferId,
         direction: payload.direction,
+      });
+      emitChange();
+      return { ok: true };
+    }
+
+    if (type === 'RESUME_REQUEST') {
+      const members = parseDirectionMembers(payload.direction);
+      if (
+        !members ||
+        !verifyCounterparty(payload.direction, senderMemberId) ||
+        senderMemberId !== members.downloaderMemberId
+      ) {
+        return { ok: false, code: 'SENDER_MISMATCH' };
+      }
+
+      const streamer = ownerStreamers.get(payload.transferId);
+      const stState = streamer?.getState?.();
+      if (!streamer || !stState || TERMINAL_STATES.has(stState.state)) {
+        try {
+          await safeSendControl({
+            type: 'RESUME_REJECTED',
+            payload: {
+              transferId: payload.transferId,
+              fileId: payload.fileId,
+              reason: 'NOT_FOUND',
+            },
+          });
+        } catch {
+          // Ignore send failures
+        }
+        return { ok: false, code: 'NOT_FOUND' };
+      }
+
+      const expectedBytes =
+        payload.lastPersistedChunkIndex === -1
+          ? 0
+          : payload.lastPersistedChunkIndex < stState.totalChunks
+            ? Math.min(
+                stState.fileSize,
+                (payload.lastPersistedChunkIndex + 1) * FIXED_CHUNK_SIZE_BYTES,
+              )
+            : -1;
+
+      if (
+        payload.fileId !== stState.fileId ||
+        payload.direction !== stState.direction ||
+        payload.nextEpoch <= stState.epoch ||
+        payload.persistedPlaintextBytes !== expectedBytes
+      ) {
+        try {
+          await safeSendControl({
+            type: 'RESUME_REJECTED',
+            payload: {
+              transferId: payload.transferId,
+              fileId: payload.fileId,
+              reason: 'INVALID_EPOCH',
+            },
+          });
+        } catch {
+          // Ignore send failures
+        }
+        return { ok: false, code: 'INVALID_EPOCH' };
+      }
+
+      const readable = await localBoard.verifyLocalFileReadable(payload.fileId);
+      if (disposed || streamer.getState().epoch >= payload.nextEpoch) {
+        return { ok: false, code: 'INVALID_EPOCH' };
+      }
+
+      if (!readable?.ok) {
+        const rejectReason =
+          readable?.code === 'NOT_FOUND' ? 'NOT_FOUND' : 'FILE_CHANGED';
+        await streamer.failExternal('FILE_UNREADABLE');
+        negotiator.updateSessionState(payload.transferId, 'failed', {
+          errorCode: rejectReason,
+        });
+        progressTracker.updateTransfer(payload.transferId, {
+          state: 'failed',
+          errorCode: rejectReason,
+        });
+        emitError({
+          code: rejectReason,
+          transferId: payload.transferId,
+          direction: payload.direction,
+        });
+        emitChange();
+        try {
+          await safeSendControl({
+            type: 'RESUME_REJECTED',
+            payload: {
+              transferId: payload.transferId,
+              fileId: payload.fileId,
+              reason: rejectReason,
+            },
+          });
+        } catch {
+          // Ignore send failures
+        }
+        return { ok: false, code: rejectReason };
+      }
+
+      const resumeFromChunkIndex = payload.lastPersistedChunkIndex + 1;
+      const rotated = streamer.rotateEpochAndResume({
+        nextEpoch: payload.nextEpoch,
+        resumeFromChunkIndex,
+        binaryChannel: getActiveBinaryChannel(),
+      });
+      if (!rotated) {
+        try {
+          await safeSendControl({
+            type: 'RESUME_REJECTED',
+            payload: {
+              transferId: payload.transferId,
+              fileId: payload.fileId,
+              reason: 'INVALID_EPOCH',
+            },
+          });
+        } catch {
+          // Ignore send failures
+        }
+        return { ok: false, code: 'INVALID_EPOCH' };
+      }
+
+      negotiator.updateSessionState(payload.transferId, 'active', {
+        epoch: payload.nextEpoch,
+      });
+      progressTracker.updateTransfer(payload.transferId, {
+        state: 'active',
+        epoch: payload.nextEpoch,
+        bytesTransferred: payload.persistedPlaintextBytes,
+      });
+      emitChange();
+
+      try {
+        await safeSendControl({
+          type: 'RESUME_ACCEPTED',
+          payload: {
+            transferId: payload.transferId,
+            fileId: payload.fileId,
+            direction: payload.direction,
+            epoch: payload.nextEpoch,
+            resumeFromChunkIndex,
+          },
+        });
+      } catch {
+        // Channel might drop again before retry
+      }
+      return { ok: true, epoch: payload.nextEpoch };
+    }
+
+    if (type === 'RESUME_ACCEPTED') {
+      const receiver = downloaderReceivers.get(payload.transferId);
+      const expectedEpoch = pendingResumeEpochs.get(payload.transferId);
+      if (
+        !receiver ||
+        expectedEpoch === undefined ||
+        !verifyCounterparty(payload.direction, senderMemberId)
+      ) {
+        return { ok: true, ignored: true };
+      }
+
+      const rxState = receiver.getState();
+      if (
+        payload.epoch !== expectedEpoch ||
+        payload.fileId !== rxState.fileId ||
+        payload.direction !== rxState.direction ||
+        payload.resumeFromChunkIndex !== rxState.lastPersistedChunkIndex + 1
+      ) {
+        pendingResumeEpochs.delete(payload.transferId);
+        await receiver.failExternal('EPOCH_MISMATCH');
+        negotiator.updateSessionState(payload.transferId, 'failed', {
+          errorCode: 'EPOCH_MISMATCH',
+        });
+        progressTracker.updateTransfer(payload.transferId, {
+          state: 'failed',
+          errorCode: 'EPOCH_MISMATCH',
+        });
+        emitError({ code: 'EPOCH_MISMATCH', transferId: payload.transferId });
+        emitChange();
+        return { ok: false, code: 'EPOCH_MISMATCH' };
+      }
+
+      pendingResumeEpochs.delete(payload.transferId);
+      await receiver.rotateEpochAndResume(payload.epoch);
+      negotiator.updateSessionState(payload.transferId, 'active', {
+        epoch: payload.epoch,
+      });
+      progressTracker.updateTransfer(payload.transferId, {
+        state: 'active',
+        epoch: payload.epoch,
+      });
+      emitChange();
+      return { ok: true, epoch: payload.epoch };
+    }
+
+    if (type === 'RESUME_REJECTED') {
+      const receiver = downloaderReceivers.get(payload.transferId);
+      if (!receiver || !pendingResumeEpochs.has(payload.transferId)) {
+        return { ok: true, ignored: true };
+      }
+      const rxState = receiver.getState();
+      if (
+        payload.fileId !== rxState.fileId ||
+        !verifyCounterparty(rxState.direction, senderMemberId)
+      ) {
+        return { ok: true, ignored: true };
+      }
+
+      pendingResumeEpochs.delete(payload.transferId);
+      await receiver.failExternal(payload.reason);
+      negotiator.updateSessionState(payload.transferId, 'failed', {
+        errorCode: payload.reason,
+      });
+      progressTracker.updateTransfer(payload.transferId, {
+        state: 'failed',
+        errorCode: payload.reason,
+      });
+      emitError({
+        code: payload.reason,
+        transferId: payload.transferId,
+        direction: rxState.direction,
       });
       emitChange();
       return { ok: true };
@@ -493,6 +731,7 @@ export function createTransferCoordinator({
       if (TERMINAL_STATES.has(current.state)) {
         return false;
       }
+      pendingResumeEpochs.delete(transferId);
       await found.actor.cancel();
       negotiator.updateSessionState(transferId, 'cancelled', {
         clearPersistenceTarget: true,
@@ -538,11 +777,171 @@ export function createTransferCoordinator({
     return true;
   }
 
+  function handlePeerDisconnected() {
+    if (disposed) {
+      return;
+    }
+    cancelDisconnectGraceTimer();
+
+    for (const session of negotiator.getSessions()) {
+      if (session.state === 'requesting') {
+        negotiator.updateSessionState(session.transferId, 'cancelled', {
+          abortPersistenceTarget: true,
+        });
+        progressTracker.updateTransfer(session.transferId, {
+          state: 'cancelled',
+        });
+      }
+    }
+
+    for (const [transferId, streamer] of ownerStreamers.entries()) {
+      const st = streamer.getState();
+      if (st.state === 'active' || st.state === 'paused_by_user') {
+        streamer.pause('paused_reconnecting');
+        negotiator.updateSessionState(transferId, 'paused_reconnecting');
+        progressTracker.updateTransfer(transferId, {
+          state: 'paused_reconnecting',
+        });
+      }
+    }
+
+    for (const [transferId, receiver] of downloaderReceivers.entries()) {
+      const st = receiver.getState();
+      pendingResumeEpochs.delete(transferId);
+      if (st.state === 'active' || st.state === 'paused_by_user') {
+        receiver.pause('paused_reconnecting');
+        negotiator.updateSessionState(transferId, 'paused_reconnecting');
+        progressTracker.updateTransfer(transferId, {
+          state: 'paused_reconnecting',
+        });
+      } else {
+        const tracked = progressTracker.getTransfer(transferId);
+        if (tracked?.state === 'resuming') {
+          negotiator.updateSessionState(transferId, 'paused_reconnecting');
+          progressTracker.updateTransfer(transferId, {
+            state: 'paused_reconnecting',
+          });
+        }
+      }
+    }
+
+    disconnectGraceTimer = setTimeoutFn(() => {
+      disconnectGraceTimer = null;
+      if (disposed) {
+        return;
+      }
+      for (const [transferId, streamer] of ownerStreamers.entries()) {
+        if (!TERMINAL_STATES.has(streamer.getState().state)) {
+          void streamer.failExternal('INTERNAL_ERROR');
+          negotiator.updateSessionState(transferId, 'failed', {
+            errorCode: 'INTERNAL_ERROR',
+          });
+          progressTracker.updateTransfer(transferId, {
+            state: 'failed',
+            errorCode: 'INTERNAL_ERROR',
+          });
+        }
+      }
+      for (const [transferId, receiver] of downloaderReceivers.entries()) {
+        pendingResumeEpochs.delete(transferId);
+        if (!TERMINAL_STATES.has(receiver.getState().state)) {
+          void receiver.failExternal('INTERNAL_ERROR');
+          negotiator.updateSessionState(transferId, 'failed', {
+            errorCode: 'INTERNAL_ERROR',
+          });
+          progressTracker.updateTransfer(transferId, {
+            state: 'failed',
+            errorCode: 'INTERNAL_ERROR',
+          });
+        }
+      }
+      emitChange();
+    }, graceWindowMs);
+
+    emitChange();
+  }
+
+  async function handlePeerReconnected() {
+    if (disposed) {
+      return;
+    }
+    cancelDisconnectGraceTimer();
+    const remoteId = getRemoteId();
+
+    for (const [transferId, streamer] of ownerStreamers.entries()) {
+      const st = streamer.getState();
+      if (
+        !TERMINAL_STATES.has(st.state) &&
+        !verifyCounterparty(st.direction, remoteId)
+      ) {
+        await streamer.failExternal('AUTH_FAILED');
+        negotiator.updateSessionState(transferId, 'failed', {
+          errorCode: 'AUTH_FAILED',
+        });
+        progressTracker.updateTransfer(transferId, {
+          state: 'failed',
+          errorCode: 'AUTH_FAILED',
+        });
+      }
+    }
+
+    for (const [transferId, receiver] of downloaderReceivers.entries()) {
+      const st = receiver.getState();
+      if (st.state !== 'paused_reconnecting') {
+        continue;
+      }
+      if (!verifyCounterparty(st.direction, remoteId)) {
+        await receiver.failExternal('AUTH_FAILED');
+        negotiator.updateSessionState(transferId, 'failed', {
+          errorCode: 'AUTH_FAILED',
+        });
+        progressTracker.updateTransfer(transferId, {
+          state: 'failed',
+          errorCode: 'AUTH_FAILED',
+        });
+        continue;
+      }
+
+      await receiver.waitForWriteQueue();
+      if (disposed) {
+        return;
+      }
+      const latest = receiver.getState();
+      if (latest.state !== 'paused_reconnecting') {
+        continue;
+      }
+
+      const nextEpoch = latest.epoch + 1;
+      pendingResumeEpochs.set(transferId, nextEpoch);
+      negotiator.updateSessionState(transferId, 'resuming');
+      progressTracker.updateTransfer(transferId, { state: 'resuming' });
+      emitChange();
+
+      try {
+        await safeSendControl({
+          type: 'RESUME_REQUEST',
+          payload: {
+            transferId,
+            fileId: latest.fileId,
+            direction: latest.direction,
+            nextEpoch,
+            lastPersistedChunkIndex: latest.lastPersistedChunkIndex,
+            persistedPlaintextBytes: latest.lastPersistedPlaintextOffset,
+          },
+        });
+      } catch {
+        // Channel dropped again before send; handlePeerDisconnected handles cleanup
+      }
+    }
+  }
+
   function dispose() {
     if (disposed) {
       return;
     }
     disposed = true;
+    cancelDisconnectGraceTimer();
+    pendingResumeEpochs.clear();
     for (const streamer of ownerStreamers.values()) {
       streamer.dispose();
     }
@@ -567,6 +966,8 @@ export function createTransferCoordinator({
     pauseTransfer,
     resumeTransfer,
     cancelTransfer,
+    handlePeerDisconnected,
+    handlePeerReconnected,
     handleControlMessage,
     handleBinaryFrame,
     getTransfer: (transferId) => progressTracker.getTransfer(transferId),

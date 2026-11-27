@@ -26,11 +26,11 @@ export function createOwnerChunkStreamer({
   transferId,
   fileId,
   direction,
-  epoch = 1,
+  epoch: initialEpoch = 1,
   fileSize,
   lastModified,
   localBoard,
-  binaryChannel,
+  binaryChannel: initialBinaryChannel,
   cryptoProcessor,
   sendControlMessage,
   startChunkIndex = 0,
@@ -42,7 +42,7 @@ export function createOwnerChunkStreamer({
     !isValidTransferId(transferId) ||
     !isValidFileId(fileId) ||
     !isValidTransferDirection(direction) ||
-    !isValidEpoch(epoch) ||
+    !isValidEpoch(initialEpoch) ||
     !isValidNonNegativeSafeInt(fileSize) ||
     !isValidNonNegativeSafeInt(startChunkIndex)
   ) {
@@ -50,7 +50,9 @@ export function createOwnerChunkStreamer({
   }
 
   const totalChunks = fileSize === 0 ? 0 : Math.ceil(fileSize / CHUNK_SIZE_BYTES);
-  const creditTracker = createFlowCreditTracker({
+  let epoch = initialEpoch;
+  let binaryChannel = initialBinaryChannel;
+  let creditTracker = createFlowCreditTracker({
     transferId,
     fileId,
     direction,
@@ -121,35 +123,41 @@ export function createOwnerChunkStreamer({
   }
 
   let cleanupThresholdListener = () => {};
-  if (binaryChannel && typeof binaryChannel === 'object') {
+  function bindChannelThresholdListener(targetChannel) {
+    cleanupThresholdListener();
+    cleanupThresholdListener = () => {};
+    if (!targetChannel || typeof targetChannel !== 'object') {
+      return;
+    }
     try {
-      binaryChannel.bufferedAmountLowThreshold = OWNER_CHANNEL_LOW_WATER_MARK_BYTES;
+      targetChannel.bufferedAmountLowThreshold = OWNER_CHANNEL_LOW_WATER_MARK_BYTES;
     } catch {
       // Ignore read-only test mocks
     }
-    if (typeof binaryChannel.addEventListener === 'function') {
-      binaryChannel.addEventListener('bufferedamountlow', handleBufferedAmountLow);
+    if (typeof targetChannel.addEventListener === 'function') {
+      targetChannel.addEventListener('bufferedamountlow', handleBufferedAmountLow);
       cleanupThresholdListener = () => {
-        binaryChannel.removeEventListener(
+        targetChannel.removeEventListener(
           'bufferedamountlow',
           handleBufferedAmountLow,
         );
       };
     } else {
-      const previousHandler = binaryChannel.onbufferedamountlow ?? null;
-      binaryChannel.onbufferedamountlow = (event) => {
+      const previousHandler = targetChannel.onbufferedamountlow ?? null;
+      targetChannel.onbufferedamountlow = (event) => {
         if (typeof previousHandler === 'function') {
           previousHandler(event);
         }
         handleBufferedAmountLow();
       };
       cleanupThresholdListener = () => {
-        if (binaryChannel.onbufferedamountlow !== previousHandler) {
-          binaryChannel.onbufferedamountlow = previousHandler;
+        if (targetChannel.onbufferedamountlow !== previousHandler) {
+          targetChannel.onbufferedamountlow = previousHandler;
         }
       };
     }
   }
+  bindChannelThresholdListener(binaryChannel);
 
   function cleanupTransferResources() {
     pendingFrame = null;
@@ -392,6 +400,10 @@ export function createOwnerChunkStreamer({
     ) {
       return false;
     }
+    if (nextState === 'paused_reconnecting') {
+      pendingFrame = null;
+      backpressured = false;
+    }
     if (state === nextState) {
       return true;
     }
@@ -407,6 +419,48 @@ export function createOwnerChunkStreamer({
     state = 'active';
     emitState();
     schedulePump();
+    return true;
+  }
+
+  function rotateEpochAndResume({
+    nextEpoch,
+    resumeFromChunkIndex,
+    binaryChannel: nextChannel,
+  } = {}) {
+    if (
+      disposed ||
+      TERMINAL_STATES.has(state) ||
+      !isValidEpoch(nextEpoch) ||
+      nextEpoch <= epoch ||
+      !Number.isInteger(resumeFromChunkIndex) ||
+      resumeFromChunkIndex < 0 ||
+      resumeFromChunkIndex > totalChunks
+    ) {
+      return false;
+    }
+
+    pendingFrame = null;
+    backpressured = false;
+    if (cryptoProcessor && typeof cryptoProcessor.releaseTransfer === 'function') {
+      void cryptoProcessor.releaseTransfer(transferId);
+    }
+    if (nextChannel !== undefined) {
+      binaryChannel = nextChannel;
+      bindChannelThresholdListener(binaryChannel);
+    }
+
+    epoch = nextEpoch;
+    nextChunkIndex = resumeFromChunkIndex;
+    bytesSent = Math.min(fileSize, resumeFromChunkIndex * CHUNK_SIZE_BYTES);
+    creditTracker = createFlowCreditTracker({
+      transferId,
+      fileId,
+      direction,
+      epoch: nextEpoch,
+      initialOffset: bytesSent,
+    });
+    state = 'active';
+    emitState();
     return true;
   }
 
@@ -460,6 +514,7 @@ export function createOwnerChunkStreamer({
     handleFlowCredit,
     pause,
     resume,
+    rotateEpochAndResume,
     cancel,
     handleTransferComplete,
     failExternal,

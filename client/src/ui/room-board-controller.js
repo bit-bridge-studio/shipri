@@ -15,6 +15,7 @@ import {
 } from '../signaling/socket-client.js';
 import { createTransferCoordinator } from '../transfer/transfer-coordinator.js';
 import { createProductionRoomConnection } from '../webrtc/room-connection.js';
+import { createReconnectSupervisor } from '../webrtc/reconnect-supervisor.js';
 import {
   PRODUCTION_BINARY_CHANNEL_LABEL,
   PRODUCTION_CONTROL_CHANNEL_LABEL,
@@ -489,6 +490,7 @@ export function createRoomBoardController({
       notifyListeners();
     },
     onPeerReady: async () => {
+      reconnectSupervisor.notifyPeerReady();
       if (disposed || !localBoard) {
         return;
       }
@@ -496,6 +498,9 @@ export function createRoomBoardController({
         const syncMsg = await localBoard.getBoardSyncMessage();
         if (!disposed && roomConnection.getState().peerReady) {
           await roomConnection.sendControlMessage(syncMsg);
+        }
+        if (!disposed && transferCoordinator && roomConnection.getState().peerReady) {
+          await transferCoordinator.handlePeerReconnected();
         }
       } catch {
         // Ignore transient send errors while channel settles
@@ -505,6 +510,10 @@ export function createRoomBoardController({
       if (remoteBoard) {
         remoteBoard.handlePeerDisconnected();
       }
+      if (transferCoordinator) {
+        transferCoordinator.handlePeerDisconnected();
+      }
+      reconnectSupervisor.notifyPeerLeft();
       statusAnnouncement =
         'Peer disconnected. Shared files preserved for 60s reconnect window.';
       notifyListeners();
@@ -533,8 +542,27 @@ export function createRoomBoardController({
     onError: (err) => {
       errorBanner = formatErrorCopy(err);
       if (err?.code === 'ROOM_NOT_FOUND' || err?.code === 'UNAUTHORIZED' || err?.code === 'ROOM_FULL') {
+        reconnectSupervisor.notifyIntentionalLeave();
         teardownBoards();
+      } else if (
+        err?.code === 'ICE_CONNECTION_FAILED' ||
+        err?.code === 'PEER_CONNECTION_FAILED'
+      ) {
+        reconnectSupervisor.notifyTransportFailure(err.code);
       }
+      notifyListeners();
+    },
+  });
+
+  const reconnectSupervisor = createReconnectSupervisor({
+    roomConnection,
+    signalingClient,
+    onStateChange: () => notifyListeners(),
+    onExhausted: ({ reason }) => {
+      statusAnnouncement =
+        reason === 'GRACE_WINDOW_EXPIRED'
+          ? 'Reconnect grace window expired.'
+          : 'Reconnection attempts exhausted.';
       notifyListeners();
     },
   });
@@ -607,6 +635,7 @@ export function createRoomBoardController({
     qrVisible = false;
     copyFeedback = null;
     errorBanner = null;
+    reconnectSupervisor.notifyIntentionalLeave();
     teardownBoards();
     roomConnection.leaveRoom();
     statusAnnouncement = 'Left room and wiped encryption keys from session.';
@@ -729,6 +758,7 @@ export function createRoomBoardController({
       copyTimer = null;
     }
     listeners.clear();
+    reconnectSupervisor.dispose();
     teardownBoards();
     roomConnection.dispose();
     if (ownsSignalingClient) {

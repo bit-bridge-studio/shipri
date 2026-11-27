@@ -56,6 +56,7 @@ export function createProductionRoomConnection(options = {}) {
   let shareUrl = null;
   let shareOrigin = resolveOrigin(locationObj, options.origin);
   let remoteMemberId = null;
+  let observedPeerGeneration = 0;
   let helloSentForGeneration = -1;
   let peerReadyNotified = false;
   let lastError = null;
@@ -190,6 +191,8 @@ export function createProductionRoomConnection(options = {}) {
 
   async function handleInboundControlData(rawData) {
     const session = keyLifecycle.getActiveSession();
+    const genAtReceive = peerManager.getState().generation;
+    const roomAtReceive = session?.roomId ?? null;
     if (disposed || !session || typeof rawData !== 'string') {
       return;
     }
@@ -207,10 +210,18 @@ export function createProductionRoomConnection(options = {}) {
 
     const result = await decryptControlMessage({
       masterKeyBytes: session.masterKeyBytes,
-      roomId: session.roomId,
+      roomId: roomAtReceive,
       expectedSenderMemberId: remoteMemberId ?? undefined,
       envelope,
     });
+
+    if (
+      disposed ||
+      peerManager.getState().generation !== genAtReceive ||
+      keyLifecycle.getActiveSession()?.roomId !== roomAtReceive
+    ) {
+      return;
+    }
 
     if (!result.ok) {
       forwardError({
@@ -251,7 +262,14 @@ export function createProductionRoomConnection(options = {}) {
     peerConnectionFactory,
     iceTransportPolicy,
     iceGatheringTimeoutMs,
-    onStateChange: () => emitState(),
+    onStateChange: (peerSnapshot) => {
+      if (peerSnapshot.generation !== observedPeerGeneration) {
+        observedPeerGeneration = peerSnapshot.generation;
+        remoteMemberId = null;
+        peerReadyNotified = false;
+      }
+      emitState();
+    },
     onChannelOpen: (label) => {
       if (disposed) {
         return;
@@ -282,6 +300,9 @@ export function createProductionRoomConnection(options = {}) {
         return;
       }
       if (label === PRODUCTION_BINARY_CHANNEL_LABEL) {
+        if (!keyLifecycle.getActiveSession()) {
+          return;
+        }
         if (typeof onBinaryFrame === 'function') {
           onBinaryFrame(data);
         }
@@ -404,11 +425,22 @@ export function createProductionRoomConnection(options = {}) {
     keyLifecycle.wipeForLeave();
   }
 
+  function reconnect() {
+    if (disposed) {
+      return false;
+    }
+    remoteMemberId = null;
+    peerReadyNotified = false;
+    const ok = peerManager.reconnect();
+    emitState();
+    return ok;
+  }
+
   return Object.freeze({
     createRoom,
     joinRoom,
     leaveRoom,
-    reconnect: () => peerManager.reconnect(),
+    reconnect,
     setIceTransportPolicy: (policy) => peerManager.setIceTransportPolicy(policy),
     sendControlMessage,
     sendBinaryFrame,

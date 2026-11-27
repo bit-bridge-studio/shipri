@@ -283,6 +283,7 @@ export function createDownloaderReceiver({
       disposed ||
       failing ||
       TERMINAL_STATES.has(state) ||
+      state === 'paused_reconnecting' ||
       epochAtReceive !== currentEpoch
     ) {
       return;
@@ -309,6 +310,7 @@ export function createDownloaderReceiver({
       disposed ||
       failing ||
       TERMINAL_STATES.has(state) ||
+      state === 'paused_reconnecting' ||
       epochAtReceive !== currentEpoch
     ) {
       return;
@@ -350,6 +352,9 @@ export function createDownloaderReceiver({
     queuedFrames = Math.max(0, queuedFrames - 1);
     lastPersistedChunkIndex = chunkIndex;
     lastPersistedPlaintextOffset = chunkEndOffset;
+    if (state === 'paused_reconnecting') {
+      nextExpectedChunkIndex = lastPersistedChunkIndex + 1;
+    }
     emitState();
 
     if (lastPersistedPlaintextOffset === fileSize) {
@@ -382,7 +387,12 @@ export function createDownloaderReceiver({
   }
 
   function handleBinaryFrame(rawFrame) {
-    if (disposed || failing || TERMINAL_STATES.has(state)) {
+    if (
+      disposed ||
+      failing ||
+      TERMINAL_STATES.has(state) ||
+      state === 'paused_reconnecting'
+    ) {
       return { ok: true, ignored: true };
     }
     if (!activated) {
@@ -498,6 +508,11 @@ export function createDownloaderReceiver({
     ) {
       return false;
     }
+    if (nextState === 'paused_reconnecting') {
+      queuedBytes = 0;
+      queuedFrames = 0;
+      nextExpectedChunkIndex = lastPersistedChunkIndex + 1;
+    }
     if (state === nextState) {
       return true;
     }
@@ -525,6 +540,7 @@ export function createDownloaderReceiver({
     ) {
       return false;
     }
+    releaseProcessor();
     epochRotated = true;
     currentEpoch = nextEpoch;
     creditSequence = 0;
@@ -536,6 +552,10 @@ export function createDownloaderReceiver({
     emitState();
     await issueCreditWindow(true);
     return true;
+  }
+
+  function waitForWriteQueue() {
+    return writeQueue.catch(() => {});
   }
 
   async function cancel() {
@@ -572,6 +592,7 @@ export function createDownloaderReceiver({
     pause,
     resume,
     rotateEpochAndResume,
+    waitForWriteQueue,
     cancel,
     failExternal,
     getState,
