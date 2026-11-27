@@ -63,7 +63,8 @@ The MVP permits at most **one active or paused transfer per direction** (`ownerM
 Each transfer row is keyed by `transferId` and displays:
 * direction (`Downloading` / `Sending`), filename, persisted/sent bytes, throughput, ETA, transfer state (`active`, `paused_by_user`, `paused_reconnecting`, `resuming`, `completed`, `cancelled`, `failed`, `rejected`), and direct/relayed path indicator;
 * user-initiated `Pause` / `Resume` (`TRANSFER_PAUSE` / `TRANSFER_RESUME`, completely independent from internal receiver `FLOW_CREDIT` backpressure);
-* `Cancel` (`TRANSFER_CANCEL`), affecting only that `transferId` and never removing the board advertisement.
+* `Cancel` (`TRANSFER_CANCEL`), affecting only that `transferId` and never removing the board advertisement;
+* telemetry and control snapshots produced independently per `transferId` (`bytesTransferred`, `totalBytes`, `progressPercent`, `bytesPerSecond`, `etaSeconds`, `directionLabel`, `state`, `errorCode`, `rejectReason`) via `client/src/transfer/transfer-progress.js` and `client/src/transfer/transfer-coordinator.js`.
 
 ---
 
