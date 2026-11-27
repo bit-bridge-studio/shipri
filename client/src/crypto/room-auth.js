@@ -152,6 +152,18 @@ export function createRoomAuthorizationSession({
   }
 
   const unsubscribers = [
+    signalingClient.subscribeStatus((snapshot) => {
+      if (disposed) {
+        return;
+      }
+      if (snapshot?.status === 'disconnected' && snapshot?.disconnectReason) {
+        clearCredentials();
+        roomId = null;
+        status = 'disconnected';
+        notify();
+      }
+    }),
+
     signalingClient.subscribeServerEvent('room:created', (payload) => {
       if (disposed) {
         return;
@@ -195,7 +207,15 @@ export function createRoomAuthorizationSession({
         message: getSafeAuthErrorMessage(code),
       };
 
-      if (TERMINAL_AUTH_ERROR_CODES.has(code)) {
+      const isActiveRoomExpiry =
+        status === 'authorized' &&
+        code === 'ROOM_NOT_FOUND' &&
+        (!payload?.roomId || payload.roomId === roomId);
+
+      if (
+        (status === 'authorizing' && TERMINAL_AUTH_ERROR_CODES.has(code)) ||
+        isActiveRoomExpiry
+      ) {
         clearCredentials();
         roomId = null;
         status = 'failed';
