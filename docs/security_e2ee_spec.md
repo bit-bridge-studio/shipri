@@ -137,7 +137,7 @@ interface FileAdvertiseMessage {
 }
 ```
 
-* **Metadata AAD**: `utf8("shipri-board-metadata-v1:${roomId}:${fileId}")`, cryptographically binding encrypted metadata to both the room and the opaque `fileId`.
+* **Metadata AAD**: `utf8("shipri-board-metadata-v1:${roomId}:${fileId}")`, cryptographically binding encrypted metadata to both the room and the opaque `fileId`. Implemented in `client/src/crypto/board-metadata.js`.
 * **No Plaintext Leakage**: `PlaintextFileMetadata` exists only in local browser RAM before encryption and after local decryption on the remote peer.
 
 ---
