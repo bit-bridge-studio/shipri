@@ -9,9 +9,13 @@
     # 1. Route Socket.IO HTTP polling and WSS WebSocket traffic
     reverse_proxy /socket.io/* server:5001
 
-    # 2. Route HTTP health checks
+    # 2. Route HTTP liveness and readiness checks
     reverse_proxy /health server:5001
+    reverse_proxy /ready server:5001
 
-    # 3. Route all other requests to the static SPA client
+    # 3. Keep operational metrics internal to the container network
+    respond /metrics 404
+
+    # 4. Route all other requests to the static SPA client
     reverse_proxy * client:80
 }
