@@ -68,6 +68,8 @@ Open persistence before requesting a remote file, validate request/accept/reject
 
 ### FF-5: Implement Bounded Bidirectional Transfer
 
+**Status:** Completed (`2026-11-27`) - implemented dedicated chunk crypto worker offloading (`client/src/workers/chunk-crypto.worker.js`, `chunk-worker-client.js`), bounded owner chunk streaming (`client/src/transfer/owner-streamer.js`, `[52]`), bounded downloader persistence receiver (`client/src/transfer/downloader-receiver.js`, `[53]`), per-transfer progress/ETA tracking (`client/src/transfer/transfer-progress.js`), and simultaneous opposite-direction orchestration (`client/src/transfer/transfer-coordinator.js`, `[54]`).
+
 Implement owner-side channel backpressure, downloader-side bounded write queues and flow control, encrypted binary framing, progress, pause, cancel, completion, and direct-to-disk writes. Prove simultaneous transfers in opposite directions.
 
 ### FF-6: Implement Reconnection and Safe Resume
