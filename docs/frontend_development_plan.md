@@ -56,6 +56,8 @@ Reuse production-safe signaling and WebRTC modules, enforce room authorization, 
 
 ### FF-3: Implement Encrypted Shared File Board
 
+**Progress:** Implemented owner-side local file registry `client/src/board/local-board.js` (`[49]`) supporting multi-file encrypted `FILE_ADVERTISE`/`BOARD_SYNC` publishing, duplicate suppression, unreadable file detection, owner-browser `File` handle isolation, and active-transfer handle retention after `FILE_REMOVE`. Remaining in `FF-3`: remote board synchronization (`[50]`).
+
 Allow either peer to add and remove local file advertisements. Synchronize encrypted advertisements after connection and reconnection. Never send board state through the backend.
 
 ### FF-4: Implement Download Requests and Transfer Sessions
