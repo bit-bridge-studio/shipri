@@ -133,6 +133,9 @@ export function createPeerConnectionManager(options = {}) {
   let connectionStatus = signalingClient.getStatus?.().status ?? 'disconnected';
 
   let generation = 0;
+  let lastAcceptedOfferGeneration = 0;
+  let lastAcceptedRenegotiateGeneration = 0;
+  let remoteGeneration = null;
   let activeConnection = null;
   let activePeerId = null;
   let remoteDescriptionSet = false;
@@ -221,6 +224,7 @@ export function createPeerConnectionManager(options = {}) {
   function teardownConnection() {
     clearGatheringTimer();
     rejectPendingIceWaiter('NEGOTIATION_CANCELLED', 'Connection torn down.');
+    remoteGeneration = null;
     iceGatheringStalled = false;
     remoteDescriptionSet = false;
     activePeerId = null;
@@ -422,7 +426,7 @@ export function createPeerConnectionManager(options = {}) {
       try {
         signalingClient.forwardSignal(roomId, {
           kind: 'ice',
-          generation: expectedGen,
+          generation: remoteGeneration ?? expectedGen,
           candidate: candidateInit,
         });
       } catch {
@@ -544,31 +548,68 @@ export function createPeerConnectionManager(options = {}) {
       return;
     }
 
-    if (activePeerId && senderPeerId && senderPeerId !== activePeerId) {
+    const expectedPeerId = activePeerId ?? remotePeerId;
+    if (expectedPeerId && senderPeerId && senderPeerId !== expectedPeerId) {
       staleEventsIgnored += 1;
       return;
     }
 
-    if (
-      typeof signalData.generation === 'number' &&
-      signalData.generation !== expectedGen
-    ) {
-      // Allow initial offer from offerer to establish generation on answerer if not yet active
-      if (!(negotiationDuty === 'answerer' && signalData.kind === 'sdp' && signalData.description?.type === 'offer')) {
+    if (signalData.kind === 'renegotiate') {
+      if (negotiationDuty !== 'offerer' || peerState !== 'connected') {
         staleEventsIgnored += 1;
         return;
       }
+      if (typeof signalData.generation === 'number') {
+        if (signalData.generation <= lastAcceptedRenegotiateGeneration) {
+          staleEventsIgnored += 1;
+          return;
+        }
+        lastAcceptedRenegotiateGeneration = signalData.generation;
+      }
+      teardownConnection();
+      generation += 1;
+      lastError = null;
+      notifyState();
+      void startOffererNegotiation(generation, roomId, remotePeerId);
+      return;
+    }
+
+    if (
+      negotiationDuty === 'answerer' &&
+      signalData.kind === 'sdp' &&
+      signalData.description?.type === 'offer'
+    ) {
+      const hasNumericGen = typeof signalData.generation === 'number';
+      if (hasNumericGen) {
+        if (signalData.generation <= lastAcceptedOfferGeneration) {
+          staleEventsIgnored += 1;
+          return;
+        }
+        lastAcceptedOfferGeneration = signalData.generation;
+      } else if (activeConnection) {
+        staleEventsIgnored += 1;
+        return;
+      }
+
+      if (activeConnection) {
+        teardownConnection();
+        generation += 1;
+      }
+      remoteGeneration = hasNumericGen ? signalData.generation : null;
+      await handleAnswererOffer(payload, generation);
+      return;
+    }
+
+    const expectedSignalGen = remoteGeneration ?? expectedGen;
+    if (
+      typeof signalData.generation === 'number' &&
+      signalData.generation !== expectedSignalGen
+    ) {
+      staleEventsIgnored += 1;
+      return;
     }
 
     if (!activeConnection) {
-      if (
-        negotiationDuty === 'answerer' &&
-        signalData.kind === 'sdp' &&
-        signalData.description?.type === 'offer'
-      ) {
-        await handleAnswererOffer(payload, expectedGen);
-        return;
-      }
       pendingInboundSignals.push(payload);
       return;
     }
@@ -722,6 +763,20 @@ export function createPeerConnectionManager(options = {}) {
     }
   }
 
+  function resetToUnaffiliated() {
+    generation += 1;
+    lastAcceptedOfferGeneration = 0;
+    lastAcceptedRenegotiateGeneration = 0;
+    teardownConnection();
+    roomId = null;
+    selfPeerId = null;
+    remotePeerId = null;
+    peerState = 'unaffiliated';
+    negotiationDuty = null;
+    lastError = null;
+    notifyState();
+  }
+
   const unsubscribers = [
     signalingClient.subscribeStatus((snapshot) => {
       if (disposed) {
@@ -729,16 +784,29 @@ export function createPeerConnectionManager(options = {}) {
       }
       connectionStatus = snapshot.status;
       if (snapshot.status === 'disconnected' && snapshot.disconnectReason) {
-        generation += 1;
-        teardownConnection();
-        roomId = null;
-        selfPeerId = null;
-        remotePeerId = null;
-        peerState = 'unaffiliated';
-        negotiationDuty = null;
+        resetToUnaffiliated();
+        return;
       }
       notifyState();
     }),
+
+    ...(typeof signalingClient.subscribeEvents === 'function'
+      ? [
+          signalingClient.subscribeEvents((entry) => {
+            if (disposed) {
+              return;
+            }
+            if (
+              entry?.direction === 'outbound' &&
+              entry?.event === 'room:leave' &&
+              roomId &&
+              entry?.roomId === roomId
+            ) {
+              resetToUnaffiliated();
+            }
+          }),
+        ]
+      : []),
 
     signalingClient.subscribeServerEvent('room:created', (payload) => {
       if (disposed) {
@@ -749,6 +817,8 @@ export function createPeerConnectionManager(options = {}) {
         return;
       }
       generation += 1;
+      lastAcceptedOfferGeneration = 0;
+      lastAcceptedRenegotiateGeneration = 0;
       teardownConnection();
       roomId = nextRoomId;
       selfPeerId = normalizePeerId(payload?.peerId);
@@ -768,6 +838,8 @@ export function createPeerConnectionManager(options = {}) {
         return;
       }
       generation += 1;
+      lastAcceptedOfferGeneration = 0;
+      lastAcceptedRenegotiateGeneration = 0;
       teardownConnection();
       roomId = nextRoomId;
       selfPeerId = normalizePeerId(payload?.peerId);
@@ -788,6 +860,8 @@ export function createPeerConnectionManager(options = {}) {
         return;
       }
       const joinedPeerId = normalizePeerId(payload?.peerId);
+      lastAcceptedOfferGeneration = 0;
+      lastAcceptedRenegotiateGeneration = 0;
       teardownConnection();
       generation += 1;
       remotePeerId = joinedPeerId;
@@ -808,6 +882,8 @@ export function createPeerConnectionManager(options = {}) {
         return;
       }
       generation += 1;
+      lastAcceptedOfferGeneration = 0;
+      lastAcceptedRenegotiateGeneration = 0;
       teardownConnection();
       remotePeerId = null;
       peerState = 'waiting_for_peer';
@@ -886,6 +962,34 @@ export function createPeerConnectionManager(options = {}) {
 
     if (negotiationDuty === 'offerer') {
       void startOffererNegotiation(generation, targetRoomId, targetPeerId);
+      return true;
+    }
+
+    try {
+      signalingClient.forwardSignal(targetRoomId, {
+        kind: 'renegotiate',
+        generation,
+      });
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Leaves the active room locally and notifies signaling, closing channels and
+   * resetting state to unaffiliated even if the Socket.IO connection remains open.
+   */
+  function leaveRoom() {
+    if (disposed || !roomId) {
+      return false;
+    }
+    const targetRoomId = roomId;
+    resetToUnaffiliated();
+    try {
+      signalingClient.leaveRoom(targetRoomId);
+    } catch {
+      // Local WebRTC state is already cleaned up.
     }
     return true;
   }
@@ -921,6 +1025,7 @@ export function createPeerConnectionManager(options = {}) {
     getChannel: (label) => channels.get(label) ?? null,
     setIceTransportPolicy,
     reconnect,
+    leaveRoom,
     dispose,
   });
 }
