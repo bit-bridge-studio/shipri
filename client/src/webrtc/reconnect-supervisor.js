@@ -34,6 +34,7 @@ export function createReconnectSupervisor({
   let lastAffiliatedRoomId = roomConnection.getState()?.roomId ?? null;
   let retryTimer = null;
   let graceTimer = null;
+  let stepInFlight = false;
 
   function getState() {
     return Object.freeze({
@@ -132,7 +133,7 @@ export function createReconnectSupervisor({
   }
 
   async function executeReconnectStep() {
-    if (disposed || state !== 'reconnecting') {
+    if (disposed || state !== 'reconnecting' || stepInFlight) {
       return false;
     }
 
@@ -151,22 +152,27 @@ export function createReconnectSupervisor({
       (signalingClient?.getStatus?.().status ?? connState?.connectionStatus) ===
       'connected';
 
+    stepInFlight = true;
     attempts += 1;
     emitState();
 
-    if (connState?.roomId && connState.peerState === 'connected') {
-      roomConnection.reconnect();
-    } else if (
-      !connState?.roomId &&
-      lastAffiliatedRoomId &&
-      signalingConnected &&
-      typeof roomConnection.joinRoom === 'function'
-    ) {
-      try {
-        await roomConnection.joinRoom(lastAffiliatedRoomId);
-      } catch {
-        // Retry timer still governs remaining attempts within grace window
+    try {
+      if (connState?.roomId && connState.peerState === 'connected') {
+        roomConnection.reconnect();
+      } else if (
+        !connState?.roomId &&
+        lastAffiliatedRoomId &&
+        signalingConnected &&
+        typeof roomConnection.joinRoom === 'function'
+      ) {
+        try {
+          await roomConnection.joinRoom(lastAffiliatedRoomId);
+        } catch {
+          // Retry timer still governs remaining attempts within grace window
+        }
       }
+    } finally {
+      stepInFlight = false;
     }
 
     if (!disposed && state === 'reconnecting') {
@@ -209,6 +215,7 @@ export function createReconnectSupervisor({
       lastAffiliatedRoomId = currentRoomId;
     }
     clearAllTimers();
+    stepInFlight = false;
     attempts = 0;
     lastReason = null;
     state = 'connected';
@@ -231,6 +238,7 @@ export function createReconnectSupervisor({
       return;
     }
     clearAllTimers();
+    stepInFlight = false;
     attempts = 0;
     lastReason = null;
     lastAffiliatedRoomId = null;
@@ -239,7 +247,7 @@ export function createReconnectSupervisor({
   }
 
   function triggerReconnectAttempt() {
-    if (disposed || state === 'exhausted') {
+    if (disposed || state === 'exhausted' || stepInFlight) {
       return false;
     }
     const connState = roomConnection.getState();
@@ -261,6 +269,7 @@ export function createReconnectSupervisor({
       return;
     }
     disposed = true;
+    stepInFlight = false;
     clearAllTimers();
     lastAffiliatedRoomId = null;
   }
