@@ -237,4 +237,49 @@ describe('URL fragment key lifecycle (ticket [44])', () => {
       storage.snapshot()[`${SESSION_STORAGE_PREFIX}ship-77cc`],
     ).toBeUndefined();
   });
+
+  it('supports pre-room prepareCreation and bindCreatedRoom plus pre-generated createForRoom without regenerating a mismatched key', () => {
+    const storage = createMockSessionStorage();
+    const lifecycle = createFragmentKeyLifecycle({
+      storage,
+      locationObj: {
+        origin: 'https://shipri.app',
+        pathname: '/',
+        search: '',
+        hash: '',
+      },
+      historyObj: { replaceState: vi.fn() },
+    });
+
+    // Binding without pending key fails closed
+    expect(lifecycle.bindCreatedRoom('ship-11aa').code).toBe('MISSING_KEY');
+
+    // Creator prepares key BEFORE room:create
+    const pending = lifecycle.prepareCreation();
+    expect(pending.ok).toBe(true);
+    expect(pending.masterKeyBytes).toBeInstanceOf(Uint8Array);
+    expect(pending.masterKeyBytes.byteLength).toBe(ROOM_KEY_BYTES);
+    expect(pending.masterKeyBase64Url).toHaveLength(43);
+
+    // Server returns room:created -> bind exact pre-generated material to roomId
+    const bound = lifecycle.bindCreatedRoom('ship-11aa');
+    expect(bound.ok).toBe(true);
+    expect(bound.roomId).toBe('ship-11aa');
+    expect(bound.source).toBe('created');
+    expect(bound.masterKeyBase64Url).toBe(pending.masterKeyBase64Url);
+    expect(bound.masterKeyBytes).toEqual(pending.masterKeyBytes);
+    expect(bound.memberId).toBe(pending.memberId);
+    expect(storage.snapshot()[`${SESSION_STORAGE_PREFIX}ship-11aa`]).toBeDefined();
+
+    // Direct createForRoom(roomId, pregenerated) preserves caller key material
+    const manual = generateMasterKey();
+    const directMember = generateMemberId();
+    const direct = lifecycle.createForRoom('ship-22bb', {
+      masterKeyBytes: manual.masterKeyBytes,
+      memberId: directMember,
+    });
+    expect(direct.ok).toBe(true);
+    expect(direct.masterKeyBase64Url).toBe(manual.masterKeyBase64Url);
+    expect(direct.memberId).toBe(directMember);
+  });
 });
