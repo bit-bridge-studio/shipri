@@ -590,7 +590,10 @@ export function createDownloadNegotiator({
     if (Object.hasOwn(patch, 'rejectReason')) {
       session.rejectReason = patch.rejectReason;
     }
-    if (patch.clearPersistenceTarget) {
+    if (patch.abortPersistenceTarget && session.persistenceTarget) {
+      void session.persistenceTarget.abort();
+      session.persistenceTarget = null;
+    } else if (patch.clearPersistenceTarget) {
       session.persistenceTarget = null;
     }
     const snapshot = snapshotSession(session);
