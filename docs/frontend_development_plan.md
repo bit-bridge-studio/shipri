@@ -80,11 +80,13 @@ Restore board state, renegotiate WebRTC, authenticate resume state, rotate trans
 
 ### FF-7: Define Browser Support and Persistence Limits
 
+**Status:** Completed (`2026-11-27`) - implemented runtime capability profiling, `256 TiB` protocol limit and available-storage eligibility checks, and frozen deferred-extension metadata (`client/src/persistence/capability-limits.js`, `client/src/persistence/file-persistence.js`), pre-picker/pre-request rejection (`client/src/transfer/download-negotiator.js`), and UI warning/limit feedback (`client/src/ui/room-board-controller.js`, `client/src/ui/RoomBoardApp.jsx`, `[57]`).
+
 Detect the verified File System Access MVP path, document unsupported browsers, and show capability and size limits before a download request. Service Worker streaming and IndexedDB implementations remain separate future extensions until their browser behavior is approved.
 
 ### FF-8: Complete Product UX and Release Gate
 
-**Progress:** Implemented the accessible responsive equal-peer room-board UX (`client/src/ui/RoomBoardApp.jsx`, `client/src/ui/room-board-controller.js`, `client/src/ui/qr-code.js`, mounted by `client/src/main.jsx` with `[55]`). Remaining in `FF-6`..`FF-8`: reconnection/resume (`[56]`), capability/limit hardening (`[57]`), and Playwright E2E/release gate (`[58]`..`[60]`).
+**Progress:** Implemented the accessible responsive equal-peer room-board UX (`client/src/ui/RoomBoardApp.jsx`, `client/src/ui/room-board-controller.js`, `client/src/ui/qr-code.js`, mounted by `client/src/main.jsx` with `[55]`). Remaining in `FF-8`: Playwright E2E setup, E2E scenario coverage, and release gate (`[58]`..`[60]`, pending Playwright dependency/script approval).
 
 Deliver accessible responsive room-board UX, Playwright coverage, direct and forced-TURN scenarios, bounded-memory measurements, and security verification.
 

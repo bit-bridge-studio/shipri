@@ -18,7 +18,10 @@ function formatBytes(bytes) {
   if (bytes < 1024 * 1024 * 1024) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (bytes < 1024 ** 4) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+  return `${(bytes / 1024 ** 4).toFixed(2)} TB`;
 }
 
 function formatEta(etaSeconds) {
@@ -416,6 +419,21 @@ export default function RoomBoardApp({ controller, initialState } = {}) {
                 <span className="status-label">{uiState.remoteSyncState}</span>
               </div>
 
+              {uiState.capability?.supported ? (
+                <p className="board-inline-hint">
+                  Direct-to-disk saving active.{' '}
+                  {typeof uiState.storageEstimate?.availableBytes === 'number'
+                    ? `Estimated available storage: ${formatBytes(
+                        uiState.storageEstimate.availableBytes,
+                      )}.`
+                    : uiState.capability.maxProtocolFileSizeBytes
+                      ? `Protocol file size limit: ${formatBytes(
+                          uiState.capability.maxProtocolFileSizeBytes,
+                        )}.`
+                      : null}
+                </p>
+              ) : null}
+
               {uiState.hasActiveIncomingDownload ? (
                 <p className="board-inline-hint">
                   Finish or cancel the current download before starting another.
@@ -433,9 +451,13 @@ export default function RoomBoardApp({ controller, initialState } = {}) {
                   {uiState.remoteFiles.map((file) => {
                     const isAvailable =
                       file.availability === 'available' && uiState.peerReady;
+                    const limitBlocked = Boolean(
+                      file.insufficientStorage || file.exceedsProtocolLimit,
+                    );
                     const disabled =
                       !isAvailable ||
                       !uiState.capability.supported ||
+                      limitBlocked ||
                       uiState.hasActiveIncomingDownload;
                     return (
                       <li key={file.fileId} className="file-card">
@@ -449,6 +471,11 @@ export default function RoomBoardApp({ controller, initialState } = {}) {
                               ? ' - Unavailable (peer reconnecting)'
                               : ' - Available'}
                           </span>
+                          {file.limitGuidance ? (
+                            <span className="file-card-warning">
+                              {file.limitGuidance}
+                            </span>
+                          ) : null}
                         </div>
                         <button
                           type="button"
