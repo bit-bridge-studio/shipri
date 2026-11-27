@@ -70,7 +70,7 @@ All cryptographic secrets derive from the single 256-bit `masterKeyBytes` via We
 
 | Domain Purpose | HKDF Salt | HKDF Info | Output Type & Usage |
 | :--- | :--- | :--- | :--- |
-| Room Signaling Authorization | `utf8("shipri-room-auth-salt-v1")` | `utf8("shipri-room-auth-v1")` | 256-bit `authToken` (`base64url`) + `SHA-256(utf8(authToken))` (`authVerifier`); independent of `roomId` and disjoint from all E2EE AES-GCM keys. |
+| Room Signaling Authorization | `utf8("shipri-room-auth-salt-v1")` | `utf8("shipri-room-auth-v1")` | 256-bit `authToken` (`base64url`) + `SHA-256(utf8(authToken))` (`authVerifier`); implemented in `client/src/crypto/room-auth.js`, independent of `roomId` and disjoint from all E2EE AES-GCM keys. |
 | File-Board Metadata Encryption | `utf8("shipri:${roomId}")` | `utf8("shipri-board-metadata-v1")` | 256-bit non-extractable `AES-GCM` key (`encrypt`, `decrypt`) for `FILE_ADVERTISE.encryptedMetadata`. |
 | Authenticated Control Channel | `utf8("shipri:${roomId}")` | `utf8("shipri-control-v1")` | 256-bit non-extractable `AES-GCM` key (`encrypt`, `decrypt`) for `ControlEnvelope` AEAD on `shipri-control`. |
 | Per-Transfer-Epoch Binary Chunks | `utf8("shipri:${roomId}")` | `utf8("shipri-file-chunks-v1:${transferId}:${direction}:${epoch}")` | 256-bit non-extractable `AES-GCM` key (`encrypt`, `decrypt`) unique to one `(roomId, transferId, direction, epoch)`. |

@@ -683,8 +683,11 @@ export function sanitizeTextValue(value, options = {}) {
     '$1[REDACTED]',
   );
 
-  // Strip bearer tokens and JWT-like structures.
-  text = text.replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]');
+  // Strip bearer tokens, space-separated auth tokens/verifiers, and JWT-like structures.
+  text = text.replace(
+    /\b(Bearer|token|auth[_-]?token|auth[_-]?verifier)\s+[A-Za-z0-9._~+/=-]{16,}/gi,
+    '$1 [REDACTED]',
+  );
   text = text.replace(
     /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
     '[REDACTED_TOKEN]',
@@ -692,7 +695,7 @@ export function sanitizeTextValue(value, options = {}) {
 
   // Strip key-value secrets and private file-board/chunk/metadata fields.
   text = text.replace(
-    /\b(TURN_SHARED_SECRET|credential|username|password|secret|auth[_-]?token|room[_-]?token|access[_-]?token|refresh[_-]?token|authorization|master[_-]?key|encryption[_-]?key|fileName|fileSize|fileType|mimeType|sha256|fileBoard|encryptedMetadata|ciphertext|plaintext|chunkData|iv)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)/gi,
+    /\b(TURN_SHARED_SECRET|credential|username|password|secret|auth[_-]?token|auth[_-]?verifier|room[_-]?token|access[_-]?token|refresh[_-]?token|authorization|master[_-]?key|encryption[_-]?key|fileName|fileSize|fileType|mimeType|sha256|fileBoard|encryptedMetadata|ciphertext|plaintext|chunkData|iv)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)/gi,
     '$1$2[REDACTED]',
   );
 
