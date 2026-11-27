@@ -138,7 +138,7 @@ export async function dropVirtualFile(
     sizeBytes,
     seed,
     mimeType,
-    bytes: sizeBytes <= 2 * 1024 * 1024 ? expectedBytes : null,
+    bytes: sizeBytes <= 4 * 1024 * 1024 ? expectedBytes : null,
     sha256Hex,
     streamDigestHex,
   };
