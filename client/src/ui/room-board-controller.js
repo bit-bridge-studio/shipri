@@ -8,6 +8,10 @@ import {
   generateMemberId,
 } from '../crypto/fragment-key.js';
 import { buildRoomShareUrl } from '../crypto/room-auth.js';
+import {
+  PROTOCOL_MAX_FILE_SIZE_BYTES,
+  evaluateFilePersistenceEligibility,
+} from '../persistence/capability-limits.js';
 import { evaluatePersistenceCapability } from '../persistence/file-persistence.js';
 import {
   createSignalingClient,
@@ -102,15 +106,27 @@ const ERROR_COPY = Object.freeze({
   },
 });
 
+const GUIDANCE_OVERRIDE_CODES = new Set([
+  'LIMIT_EXCEEDED',
+  'MISSING_FILE_SYSTEM_ACCESS_API',
+  'INSECURE_CONTEXT',
+]);
+
 export function formatErrorCopy(errorObj) {
   const code =
     typeof errorObj?.code === 'string' ? errorObj.code : 'UNKNOWN_ERROR';
   const known = ERROR_COPY[code];
   if (known) {
+    const customGuidance =
+      GUIDANCE_OVERRIDE_CODES.has(code) &&
+      typeof errorObj?.guidance === 'string' &&
+      errorObj.guidance.trim() !== ''
+        ? sanitizeTextValue(errorObj.guidance, { maxLength: 240 })
+        : null;
     return Object.freeze({
       code,
       title: known.title,
-      message: known.message,
+      message: customGuidance || known.message,
     });
   }
   return Object.freeze({
@@ -195,6 +211,12 @@ export function createInitialRoomBoardUiState(overrides = {}) {
       mode: 'file-system-access',
       reason: null,
       guidance: null,
+      maxProtocolFileSizeBytes: PROTOCOL_MAX_FILE_SIZE_BYTES,
+    }),
+    storageEstimate: Object.freeze({
+      quotaBytes: null,
+      usageBytes: null,
+      availableBytes: null,
     }),
     localFiles: [],
     remoteFiles: [],
@@ -250,11 +272,18 @@ export function createRoomBoardController({
 
   const listeners = new Set();
 
-  function evaluateBrowserCapability() {
+  function evaluateCapabilitiesSnapshot() {
     if (transferCoordinator) {
-      return transferCoordinator.getCapabilities().capability;
+      return transferCoordinator.getCapabilities();
     }
-    return evaluatePersistenceCapability({ windowObj });
+    return {
+      capability: evaluatePersistenceCapability({ windowObj, navigatorObj }),
+      storageEstimate: Object.freeze({
+        quotaBytes: null,
+        usageBytes: null,
+        availableBytes: null,
+      }),
+    };
   }
 
   function resolveInitialRoomIdFromLocation() {
@@ -317,8 +346,38 @@ export function createRoomBoardController({
 
   function buildUiState() {
     const connState = roomConnection.getState();
+    const capabilitiesSnapshot = evaluateCapabilitiesSnapshot();
+    const capability = capabilitiesSnapshot.capability;
+    const storageEstimate = capabilitiesSnapshot.storageEstimate;
     const localFiles = localBoard ? localBoard.getPublicEntries() : [];
-    const remoteFiles = remoteBoard ? remoteBoard.getEntries() : [];
+    const rawRemoteFiles = remoteBoard ? remoteBoard.getEntries() : [];
+    const remoteFiles = rawRemoteFiles.map((entry) => {
+      const preEval = transferCoordinator?.getPreEvaluatedEntry?.(entry.fileId);
+      const eligibility = preEval
+        ? {
+            eligible: preEval.canDownload,
+            insufficientStorage: preEval.insufficientStorage,
+            exceedsProtocolLimit: preEval.exceedsProtocolLimit,
+            guidance: preEval.limitGuidance,
+          }
+        : evaluateFilePersistenceEligibility({
+            fileSize: entry.fileSize,
+            capability,
+            storageEstimate,
+          });
+      return Object.freeze({
+        ...entry,
+        canDownload: Boolean(
+          eligibility.eligible && entry.availability === 'available',
+        ),
+        insufficientStorage: eligibility.insufficientStorage,
+        exceedsProtocolLimit: eligibility.exceedsProtocolLimit,
+        limitGuidance:
+          eligibility.insufficientStorage || eligibility.exceedsProtocolLimit
+            ? eligibility.guidance
+            : null,
+      });
+    });
     const transfers = transferCoordinator ? transferCoordinator.getTransfers() : [];
     const hasActiveIncomingDownload = transfers.some(
       (t) => t.role === 'downloader' && INCOMING_BUSY_STATES.has(t.state),
@@ -350,7 +409,8 @@ export function createRoomBoardController({
       qrPayload,
       copyFeedback,
       selectedPath: connState.selectedPath,
-      capability: evaluateBrowserCapability(),
+      capability,
+      storageEstimate,
       localFiles,
       remoteFiles,
       transfers,
@@ -706,7 +766,21 @@ export function createRoomBoardController({
    * synchronously before awaiting any async continuation.
    */
   function downloadRemoteFile(fileId) {
-    if (disposed || !transferCoordinator) {
+    if (disposed) {
+      return Promise.resolve({ ok: false, code: 'UNAVAILABLE' });
+    }
+    if (!transferCoordinator) {
+      const cap = evaluateCapabilitiesSnapshot().capability;
+      if (!cap.supported) {
+        const result = {
+          ok: false,
+          code: cap.reason,
+          guidance: cap.guidance,
+        };
+        errorBanner = formatErrorCopy(result);
+        notifyListeners();
+        return Promise.resolve(result);
+      }
       return Promise.resolve({ ok: false, code: 'UNAVAILABLE' });
     }
     const reqPromise = transferCoordinator.requestDownload(fileId);
