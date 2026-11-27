@@ -7,6 +7,9 @@ services:
         - VITE_SIGNALING_URL=${VITE_SIGNALING_URL:-https://poc.shipri.app}
     container_name: shipri-client
     restart: unless-stopped
+    environment:
+      - SHIPRI_ENV_HEADER=${SHIPRI_ENV_HEADER:-poc-staging}
+      - SHIPRI_ROBOTS_HEADER=${SHIPRI_ROBOTS_HEADER:-noindex, nofollow}
     expose:
       - "80"
     depends_on:
