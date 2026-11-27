@@ -111,7 +111,20 @@ We must test that the Signaling Server correctly handles its documented room sta
 
 ## 3. End-to-End (E2E) Testing (The Core QA Pillar)
 
-To verify actual WebRTC P2P transmission, we must automate interactions between two distinct browser contexts. Playwright is the preferred candidate because it supports Chromium, Firefox, and WebKit automation, but it is not yet installed and requires dependency approval.
+To verify actual WebRTC P2P transmission, we automate interactions between two distinct Playwright browser contexts against live local signaling, Vite client hosting, and ephemeral STUN/TURN infrastructure. The approved `@playwright/test` devDependency and `"test:e2e": "playwright test"` script are configured in `client/package.json`.
+
+* **Local Setup & Execution**:
+  * Install client dependencies (`cd client && npm ci`) and download the Chromium browser binary (`npx --prefix client playwright install chromium`).
+  * Run the Chromium peer-room E2E suite with `npm --prefix client run test:e2e`.
+  * Playwright specs use the `client/e2e/*.e2e.js` naming convention configured in `client/playwright.config.js` (`testDir: './e2e'`, `testMatch: /.*\.e2e\.js$/`) so `npm --prefix client test` (`vitest run`) continues running unit/integration tests independently.
+* **Isolated Harness & Zero-Fixture Stubs (`FF-8` / `[58]`)**:
+  * `client/e2e/helpers/peer-room-harness.js` spins up an ephemeral RFC 5389/5766 local UDP STUN and HMAC-SHA1 TURN relay server (`client/e2e/helpers/local-turn-server.js` with a per-run CSPRNG secret), a production-configured `createSignalingServer` instance with HTTP/Socket.IO zero-knowledge audit listeners, a per-run Vite server (dev or compiled bundle preview), and isolated Playwright browser contexts.
+  * `client/e2e/helpers/deterministic-files.js` synthesizes virtual files directly in memory (`createDeterministicBytes`, `attachInputFile`, `dropVirtualFile`, `computeSha256Hex`, `computeStreamingDigestHex`) without committing private fixtures.
+  * `client/e2e/helpers/persistence-stub.js` installs isolated per-context stubs for `window.showSaveFilePicker()`, `navigator.clipboard`, `navigator.storage.estimate()`, and optional `missing-picker` / `insecure-context` capability states.
+  * `client/e2e/setup-smoke.e2e.js` verifies two isolated Chromium contexts exchanging deterministic files through the persistence stub.
+* **Documented Browser Limitations**:
+  * Chromium supports the verified `window.showSaveFilePicker()` direct-to-disk MVP path tested with `--use-fake-ui-for-media-stream`, `--use-fake-device-for-media-stream`, and `--disable-features=WebRtcHideLocalIpsWithMdns`.
+  * Firefox and WebKit lack `window.showSaveFilePicker()` and therefore only validate unsupported-browser guidance and blocked `DOWNLOAD_REQUEST` behavior until Service Worker or IndexedDB fallbacks are separately approved.
 
 ### 3.1. E2E Test Flow Diagram
 
@@ -134,29 +147,31 @@ sequenceDiagram
     Note over TestRunner: 5. Compare SHA-256 of downloaded file<br/>with original file. Verify they match.
 ```
 
-### 3.2. Playwright Configuration Snippet
-For WebRTC testing, Chromium may need specific flags to bypass UI prompts:
+### 3.2. Playwright Configuration Reference (`client/playwright.config.js`)
+For WebRTC testing, `client/playwright.config.js` configures single-worker isolated execution and launches Chromium with flags that preserve local ICE candidates and suppress media prompts:
 ```javascript
-import { test, expect, chromium } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 
-test('E2E File Transfer: Chromium to Chromium', async () => {
-  // Launch Host browser with media & permission bypass flags
-  const peerABrowser = await chromium.launch({
-    args: [
-      '--use-fake-ui-for-media-stream',
-      '--use-fake-device-for-media-stream',
-      '--no-sandbox'
-    ]
-  });
-  const peerAContext = await peerABrowser.newContext();
-  const peerAPage = await peerAContext.newPage();
-  
-  // Launch Receiver browser context
-  const peerBBrowser = await chromium.launch();
-  const peerBContext = await peerBBrowser.newContext();
-  const peerBPage = await peerBContext.newPage();
-
-  // Test sequence goes here...
+export default defineConfig({
+  testDir: './e2e',
+  testMatch: /.*\.e2e\.js$/,
+  fullyParallel: false,
+  workers: 1,
+  projects: [
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: {
+          args: [
+            '--use-fake-ui-for-media-stream',
+            '--use-fake-device-for-media-stream',
+            '--disable-features=WebRtcHideLocalIpsWithMdns',
+          ],
+        },
+      },
+    },
+  ],
 });
 ```
 
