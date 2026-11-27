@@ -62,7 +62,7 @@ The share link places the master secret strictly in the URL fragment:
    `window.history.replaceState(null, '', window.location.pathname);`
 3. **Tab-Scoped Reload Recovery (`sessionStorage`)**: To survive same-tab reloads (F5) without re-exposing `#key=` in the URL, the client caches `{ masterKeyBase64Url, memberId }` in tab-scoped `sessionStorage` keyed by `shipri:room-session:${roomId}`.
 4. **Explicit Wipe**: The `sessionStorage` entry and in-memory key references MUST be cleared on intentional `room:leave`, terminal room errors (`ROOM_NOT_FOUND`, `UNAUTHORIZED`, `ROOM_FULL`), or explicit session reset.
-5. **Fail-Closed Validation**: Missing or non-32-byte malformed `#key=` values fail safely with user-facing error guidance without logging the raw fragment.
+5. **Fail-Closed Validation**: Missing or non-32-byte malformed `#key=` values (and accidental `?key=` query parameters) fail safely with user-facing error guidance without logging the raw fragment. Implemented in `client/src/crypto/fragment-key.js` (`generateMasterKey`, `extractAndStripFragmentKey`, `createFragmentKeyLifecycle`).
 
 ### 2.3. Domain-Separated HKDF-SHA256 Key Schedule
 
