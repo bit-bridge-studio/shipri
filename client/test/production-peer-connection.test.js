@@ -486,4 +486,125 @@ describe('production peer connection modules (ticket [42])', () => {
     clientA.dispose();
     clientB.dispose();
   });
+
+  it('handles offerer and answerer bidirectional reconnect(), rejects stale-generation offers, and cleans up on local room:leave', async () => {
+    const harness = createRoomSignalingHarness();
+    const clientA = createSignalingClient({
+      url: 'https://shipri.app',
+      ioFactory: harness.ioFactory,
+    });
+    const clientB = createSignalingClient({
+      url: 'https://shipri.app',
+      ioFactory: harness.ioFactory,
+    });
+
+    const pcFactoryA = createMockPeerConnectionFactory();
+    const pcFactoryB = createMockPeerConnectionFactory();
+
+    const managerA = createPeerConnectionManager({
+      signalingClient: clientA,
+      peerConnectionFactory: pcFactoryA,
+    });
+    const managerB = createPeerConnectionManager({
+      signalingClient: clientB,
+      peerConnectionFactory: pcFactoryB,
+    });
+
+    clientA.connect();
+    clientB.connect();
+
+    clientA.createRoom({ authVerifier: 'verifier_bidir' });
+    await flushMicrotasks();
+    const roomId = managerA.getState().roomId;
+    clientB.joinRoom({ roomId, authToken: 'token_bidir' });
+    await flushMicrotasks();
+
+    const pcA1 = managerA.getPeerConnection();
+    const pcB1 = managerB.getPeerConnection();
+    const initialGenA = managerA.getState().generation;
+    const initialGenB = managerB.getState().generation;
+    expect(pcA1).not.toBeNull();
+    expect(pcB1).not.toBeNull();
+
+    // Open initial remote channels on answerer
+    pcB1.simulateRemoteDataChannel(PRODUCTION_CONTROL_CHANNEL_LABEL).simulateOpen();
+    pcB1.simulateRemoteDataChannel(PRODUCTION_BINARY_CHANNEL_LABEL).simulateOpen();
+    managerA.getChannel(PRODUCTION_CONTROL_CHANNEL_LABEL).simulateOpen();
+    managerA.getChannel(PRODUCTION_BINARY_CHANNEL_LABEL).simulateOpen();
+
+    // 1. Offerer-initiated reconnect() replaces BOTH pcA1 and pcB1 with fresh channels
+    expect(managerA.reconnect()).toBe(true);
+    await flushMicrotasks();
+
+    const pcA2 = managerA.getPeerConnection();
+    const pcB2 = managerB.getPeerConnection();
+    expect(pcA1.closed).toBe(true);
+    expect(pcB1.closed).toBe(true);
+    expect(pcA2).not.toBeNull();
+    expect(pcA2).not.toBe(pcA1);
+    expect(pcB2).not.toBeNull();
+    expect(pcB2).not.toBe(pcB1);
+    expect(managerA.getState().generation).toBeGreaterThan(initialGenA);
+    expect(managerB.getState().generation).toBeGreaterThan(initialGenB);
+
+    const ctrlB2 = pcB2.simulateRemoteDataChannel(PRODUCTION_CONTROL_CHANNEL_LABEL);
+    const binB2 = pcB2.simulateRemoteDataChannel(PRODUCTION_BINARY_CHANNEL_LABEL);
+    ctrlB2.simulateOpen();
+    binB2.simulateOpen();
+    expect(managerB.getChannel(PRODUCTION_CONTROL_CHANNEL_LABEL)?.readyState).toBe('open');
+    expect(managerB.getChannel(PRODUCTION_BINARY_CHANNEL_LABEL)?.readyState).toBe('open');
+
+    // 2. Stale/duplicate SDP offer with generation <= lastAcceptedOfferGeneration is rejected
+    const staleBeforeB = managerB.getState().staleEventsIgnored;
+    const peerAId = pcB2 ? managerA.getState().selfPeerId : null;
+    const roomSockets = harness.rooms.get(roomId).peers;
+    const socketB = roomSockets.find((p) => p.peerId === managerB.getState().selfPeerId).socket;
+    socketB.simulateServerEvent('signal:receive', {
+      roomId,
+      peerId: peerAId,
+      signalData: {
+        kind: 'sdp',
+        generation: initialGenA,
+        description: { type: 'offer', sdp: 'v=0\r\nstale-offer' },
+      },
+    });
+    await flushMicrotasks();
+    expect(managerB.getPeerConnection()).toBe(pcB2);
+    expect(pcB2.closed).toBe(false);
+    expect(managerB.getState().staleEventsIgnored).toBe(staleBeforeB + 1);
+
+    // 3. Answerer-initiated reconnect() signals offerer and yields fresh pcA3 & pcB3
+    const genA2 = managerA.getState().generation;
+    const genB2 = managerB.getState().generation;
+    expect(managerB.reconnect()).toBe(true);
+    await flushMicrotasks();
+
+    const pcA3 = managerA.getPeerConnection();
+    const pcB3 = managerB.getPeerConnection();
+    expect(pcA2.closed).toBe(true);
+    expect(pcB2.closed).toBe(true);
+    expect(pcA3).not.toBeNull();
+    expect(pcA3).not.toBe(pcA2);
+    expect(pcB3).not.toBeNull();
+    expect(pcB3).not.toBe(pcB2);
+    expect(managerA.getState().generation).toBeGreaterThan(genA2);
+    expect(managerB.getState().generation).toBeGreaterThan(genB2);
+
+    // 4. Local room:leave tears down active channels and PC and resets to unaffiliated
+    expect(managerA.leaveRoom()).toBe(true);
+    await flushMicrotasks();
+    expect(pcA3.closed).toBe(true);
+    expect(managerA.getPeerConnection()).toBeNull();
+    expect(managerA.getChannel(PRODUCTION_CONTROL_CHANNEL_LABEL)).toBeNull();
+    expect(managerA.getState()).toMatchObject({
+      roomId: null,
+      peerState: 'unaffiliated',
+      negotiationDuty: null,
+    });
+
+    managerA.dispose();
+    managerB.dispose();
+    clientA.dispose();
+    clientB.dispose();
+  });
 });
