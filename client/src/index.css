@@ -1160,6 +1160,11 @@ body {
   color: #9aa7b5;
 }
 
+.file-card-warning {
+  font-size: 0.78rem;
+  color: #ffb4a2;
+}
+
 .board-download-btn {
   padding: 0.45rem 0.9rem;
   border-radius: 10px;
