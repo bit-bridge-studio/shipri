@@ -251,7 +251,7 @@ type ControlMessage =
 ```
 
 > [!NOTE]
-> `FLOW_PAUSE` and `FLOW_RESUME` are permanently removed from the protocol and replaced by cumulative `FLOW_CREDIT`. User-initiated `TRANSFER_PAUSE` and `TRANSFER_RESUME` remain independent controls.
+> `FLOW_PAUSE` and `FLOW_RESUME` are permanently removed from the protocol and replaced by cumulative `FLOW_CREDIT`. User-initiated `TRANSFER_PAUSE` and `TRANSFER_RESUME` remain independent controls. The authenticated `ControlEnvelope` codec and `FLOW_CREDIT` monotonic sequence tracker are implemented in `client/src/crypto/control-codec.js`.
 
 ---
 
