@@ -60,6 +60,7 @@ While each individual SCTP channel (`shipri-control` and `shipri-binary`) delive
 * **Per-File Availability States**:
   * Local file: `available` (selectable and advertised) -> `removed` (user removes advertisement; sends `FILE_REMOVE`; does NOT implicitly cancel active transfers).
   * Remote file: `available` (decrypted and downloadable) -> `unavailable_reconnecting` (remote owner disconnected; download button disabled during 60s grace window) -> restored to `available` if present in post-reconnect `BOARD_SYNC`, or `removed` when owner sends `FILE_REMOVE` or grace window expires.
+* **Implementation Modules (`FF-3`)**: `client/src/board/local-board.js` (`createLocalFileBoard`) manages owner-only `File` handles and encrypted `FILE_ADVERTISE`/`BOARD_SYNC`/`FILE_REMOVE` emission, and `client/src/board/remote-board.js` (`createRemoteFileBoard`, `RECONNECT_BOARD_GRACE_MS = 60000`) decrypts peer advertisements into read-only entries and enforces the reconnect grace expiry state machine.
 
 ### 3.3. Independent Transfer Session State Machine
 Each `transferId` tracks its own state independently of `fileId` and independently of any transfer in the opposite direction:
