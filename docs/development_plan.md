@@ -91,7 +91,7 @@ The backend implements room authorization, lifecycle, validation, abuse controls
 
 The final frontend implements an encrypted shared file board where either peer can publish local files and download remote files on demand. It also implements E2EE, bounded-memory bidirectional transfers, direct-to-disk persistence, complete UX, reconnection, browser compatibility paths, and browser E2E tests.
 
-**Gate:** supported browsers complete secure direct-P2P and forced-TURN transfer scenarios.
+**Gate:** supported browsers complete secure direct-P2P and forced-TURN transfer scenarios. (Completed on `2026-11-27` through `FF-0` - `FF-8` / `[42]` - `[60]`: server unit/integration checks, client unit/integration tests, Vite production bundle verification, and Playwright Chromium E2E direct-P2P, forced-TURN, reconnect/resume, bounded-memory `16 MiB` streaming, accessibility/responsive layout, persistence-limit, and backend zero-knowledge audits pass cleanly. Live public-network DNS staging smoke remains governed by external DNS assignment as in Parts 2 and 3.)
 
 ---
 

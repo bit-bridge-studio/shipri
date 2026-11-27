@@ -25,9 +25,9 @@ export function createChunkCryptoProcessor({ workerFactory } = {}) {
   let worker = null;
   if (typeof workerFactory === 'function') {
     worker = workerFactory();
-  } else if (typeof globalThis.Worker === 'function') {
+  } else if (typeof Worker === 'function') {
     try {
-      worker = new globalThis.Worker(
+      worker = new Worker(
         new URL('./chunk-crypto.worker.js', import.meta.url),
         { type: 'module' },
       );
